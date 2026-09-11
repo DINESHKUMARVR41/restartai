@@ -6,7 +6,10 @@
       "6205-2rs"
     ],
     "required_technicians": 2,
-    "installation_minutes": 30
+    "installation_minutes": 30,
+    "required_technician": "Mechanical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "conveyor_belt_replacement": {
     "keywords": [
@@ -14,7 +17,10 @@
       "belt replacement"
     ],
     "required_technicians": 3,
-    "installation_minutes": 90
+    "installation_minutes": 90,
+    "required_technician": "Mechanical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "motor_replacement": {
     "keywords": [
@@ -22,7 +28,10 @@
       "motor replacement"
     ],
     "required_technicians": 3,
-    "installation_minutes": 120
+    "installation_minutes": 120,
+    "required_technician": "Mechanical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "hydraulic_hose_replacement": {
     "keywords": [
@@ -30,7 +39,10 @@
       "hydraulic"
     ],
     "required_technicians": 2,
-    "installation_minutes": 45
+    "installation_minutes": 45,
+    "required_technician": "Hydraulic Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "pump_seal_replacement": {
     "keywords": [
@@ -39,7 +51,10 @@
       "pump"
     ],
     "required_technicians": 2,
-    "installation_minutes": 60
+    "installation_minutes": 60,
+    "required_technician": "Mechanical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "sensor_replacement": {
     "keywords": [
@@ -48,7 +63,10 @@
       "temperature sensor"
     ],
     "required_technicians": 1,
-    "installation_minutes": 20
+    "installation_minutes": 20,
+    "required_technician": "Controls Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "pneumatic_valve_replacement": {
     "keywords": [
@@ -56,7 +74,10 @@
       "valve"
     ],
     "required_technicians": 2,
-    "installation_minutes": 40
+    "installation_minutes": 40,
+    "required_technician": "Pneumatic Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "contactor_replacement": {
     "keywords": [
@@ -64,7 +85,10 @@
       "electrical contactor"
     ],
     "required_technicians": 1,
-    "installation_minutes": 25
+    "installation_minutes": 25,
+    "required_technician": "Electrical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "gearbox_inspection": {
     "keywords": [
@@ -72,7 +96,10 @@
       "gear box"
     ],
     "required_technicians": 2,
-    "installation_minutes": 60
+    "installation_minutes": 60,
+    "required_technician": "Mechanical Maintenance Technician",
+    "installation_required": true,
+    "technicians_available": 3
   },
   "cutting_tool_replacement": {
     "keywords": [
@@ -81,6 +108,9 @@
       "tool insert"
     ],
     "required_technicians": 1,
-    "installation_minutes": 15
+    "installation_minutes": 15,
+    "required_technician": "Machining Technician",
+    "installation_required": true,
+    "technicians_available": 3
   }
 }

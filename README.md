@@ -149,7 +149,17 @@ CALLE_BASE_URL=https://api.heycall-e.com
 
 Use authorized, consenting supplier/test numbers in valid E.164 form, for example `+14155550100`. The UI requires an explicit LIVE confirmation before dispatch. The backend keeps the API key server-side and uses stable idempotency keys.
 
-CALL-E's current API requires a stable `Idempotency-Key` for safe call creation and supports structured `recipient_result_schema` output. citeturn0search4
+CALL-E calls are created by the FastAPI backend with `POST /v1/calls`, `Authorization: Bearer ...`, `Content-Type: application/json`, and a stable `Idempotency-Key`. RestartAI then polls `GET /v1/calls/{call_id}` until `completed`, `failed`, or `canceled` and maps the completed structured result into the recovery engine.
+
+### Live CALL-E setup
+
+1. Get a CALL-E API key and put it only in local `.env`.
+2. Set `CALLE_API_KEY`, `CALL_E_MODE=live`, and `CALLE_BASE_URL=https://api.heycall-e.com`.
+3. Start FastAPI and open the app.
+4. Enter an authorized E.164 phone number for Supplier A.
+5. Select LIVE CALL-E, confirm the warning, and click **TEST LIVE CALL**.
+
+DEMO simulates deterministic supplier responses. LIVE sends actual phone calls through CALL-E. A queued response means CALL-E accepted the request; it is not shown as completed until status polling reports `completed` with a structured result.
 
 Do not use the placeholder demo numbers in LIVE mode.
 

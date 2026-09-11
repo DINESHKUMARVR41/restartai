@@ -1,5 +1,6 @@
 from app.recovery_engine import RecoveryEngine, RUNS, IDEMPOTENCY
-from app.call_e_service import CalleService
+import asyncio
+from app.call_e_service import CallEError, CalleService
 from app.models import RecoveryRequest, Supplier
 
 def request(**kwargs):
@@ -92,3 +93,70 @@ def test_idempotency_reuses_run():
     r=request(idempotency_key="incident-123")
     a=engine.start(r); b=engine.start(r)
     assert a["run_id"] == b["run_id"]
+
+
+def test_technician_intelligence_loads_from_maintenance_data():
+    engine = RecoveryEngine(CalleService())
+    data = engine.start(request())
+    technician = data["technician_intelligence"]
+    assert technician["required"] == "Mechanical Maintenance Technician"
+    assert technician["installation_required"] is True
+    assert technician["installation_minutes"] == 30
+    assert technician["technicians_available"] == 3
+    assert technician["status"] == "available"
+
+
+def test_technician_override_takes_precedence_for_availability():
+    engine = RecoveryEngine(CalleService())
+    data = engine.start(request(available_technicians=0, required_technicians_override=1))
+    technician = data["technician_intelligence"]
+    assert technician["required_count"] == 1
+    assert technician["technicians_available"] == 0
+    assert technician["status"] == "unavailable"
+
+
+def test_unknown_maintenance_task_is_not_configured():
+    engine = RecoveryEngine(CalleService())
+    data = engine.start(request(part_number="unlisted-part", part_description="unlisted component"))
+    technician = data["technician_intelligence"]
+    assert technician["status"] == "not configured"
+    assert technician["required"] is None
+    assert technician["technicians_available"] is None
+
+
+def test_live_supplier_unavailable_is_not_confirmed_and_next_supplier_can_succeed():
+    service = CalleService()
+    service.mode = "live"
+    engine = RecoveryEngine(service)
+    r = request(idempotency_key="live-failure", live_confirmed=True, suppliers=[Supplier(name="Supplier A", phone="+919876543210"), Supplier(name="Supplier B", phone="+919876543211")])
+
+    async def call_supplier(supplier, request, known_offers, idempotency_key=None):
+        if supplier.name == "Supplier A":
+            diagnostics = {"category": "supplier_unavailable", "human_message": "Supplier did not answer or was unavailable.", "failure_code": "call_failed", "failure_message": "NO ANSWER", "attempt_failure_code": "480", "attempt_failure_message": "Not available"}
+            raise CallEError("NO ANSWER", code="call_failed", call_id="call_a", diagnostics=diagnostics)
+        return {"supplier": supplier.name, "phone": supplier.phone, "quantity_available": 20, "unit_price": 100, "currency": "INR", "availability_hours": 1, "delivery_method": "delivery", "compatible": True, "confirmed": True, "compatibility_confidence": 1, "status": "FULL STOCK", "source": "CALL-E LIVE CALL", "call_id": "call_b"}
+
+    service.call_supplier_async = call_supplier
+    d = asyncio.run(engine.start_async(r))
+    assert d["offers"][0]["status"] == "SUPPLIER UNAVAILABLE"
+    assert d["offers"][0]["confirmed"] is False
+    assert d["call_failures"][0]["attempt_failure_code"] == "480"
+    d = asyncio.run(engine.replan_async(d["run_id"]))
+    assert d["offers"][1]["confirmed"] is True
+    assert d["recommended_plan"]["legs"][0]["supplier"] == "Supplier B"
+
+
+def test_live_all_failed_has_no_recovery_plan():
+    service = CalleService()
+    service.mode = "live"
+    engine = RecoveryEngine(service)
+    r = request(idempotency_key="all-failed", live_confirmed=True, suppliers=[Supplier(name="Supplier A", phone="+919876543210"), Supplier(name="Supplier B", phone="+919876543211")])
+
+    async def call_supplier(supplier, request, known_offers, idempotency_key=None):
+        raise CallEError("NO ANSWER", code="call_failed", call_id=f"call-{supplier.name[-1]}", diagnostics={"category": "supplier_unavailable", "human_message": "Supplier did not answer or was unavailable.", "failure_code": "call_failed", "failure_message": "NO ANSWER"})
+
+    service.call_supplier_async = call_supplier
+    d = asyncio.run(engine.start_async(r))
+    d = asyncio.run(engine.replan_async(d["run_id"]))
+    assert d["recommended_plan"] is None
+    assert all(o["confirmed"] is False for o in d["offers"])

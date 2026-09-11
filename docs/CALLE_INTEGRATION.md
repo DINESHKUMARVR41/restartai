@@ -20,14 +20,7 @@ CALLE_API_KEY=your_local_secret
 CALLE_BASE_URL=https://api.heycall-e.com
 ```
 
-The live path uses the official Python SDK imported server-side:
-
-```python
-from calle import CalleClient
-client.calls.create_and_wait(...)
-```
-
-The current CALL-E API supports `result_schema` and `recipient_result_schema` for structured call results and requires a stable `Idempotency-Key` for safe retries. citeturn0search4
+The live path uses `httpx.AsyncClient` server-side. It sends `POST /v1/calls` with the task, recipients, result schemas, metadata, bearer authentication, and a stable `Idempotency-Key`, then polls `GET /v1/calls/{call_id}` every two seconds for up to five minutes.
 
 ## Safety
 
@@ -64,3 +57,5 @@ Do not use an LLM for final arithmetic or operational constraints.
 ## Live testing
 
 Use only authorized/consenting test numbers and a real API key stored in local `.env`. Never commit `.env`, API keys, or real phone numbers to GitHub.
+
+The independent diagnostics endpoints are `POST /api/calle/test-call` and `GET /api/calle/call/{call_id}`. The browser talks only to FastAPI; the API key remains server-side.

@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from itertools import combinations
 from pathlib import Path
@@ -6,6 +7,7 @@ from .models import RecoveryRequest, Offer, PlanLeg, RecoveryPlan
 
 RUNS = {}
 IDEMPOTENCY = {}
+logger = logging.getLogger(__name__)
 
 
 class RecoveryEngine:
@@ -21,8 +23,35 @@ class RecoveryEngine:
         text = f"{request.part_number} {request.part_description}".lower()
         for task, info in self.maintenance.items():
             if any(k.lower() in text for k in info["keywords"]):
+                logger.info("Maintenance task requested=%s found=yes technician_data=%s", text, bool(info.get("required_technician")))
                 return task, info
-        return "unknown", {"required_technicians": 1, "installation_minutes": 30}
+        logger.info("Maintenance task requested=%s found=no technician_data=no", text)
+        return "unknown", {"required_technicians": 1, "installation_minutes": 30, "configured": False}
+
+    @staticmethod
+    def _maintenance_state(task_name, task_info, required_techs, installation, available_techs):
+        configured = task_name != "unknown" and task_info.get("configured", True)
+        required_capability = task_info.get("required_technician") if configured else None
+        installation_required = task_info.get("installation_required") if configured else None
+        knowledge_base_available = task_info.get("technicians_available") if configured else None
+        effective_available = available_techs if available_techs is not None else knowledge_base_available
+        if not configured:
+            status = "not configured"
+        elif effective_available is None:
+            status = "not configured"
+        elif effective_available >= required_techs:
+            status = "available"
+        else:
+            status = "unavailable"
+        return {
+            "required": required_capability,
+            "required_count": required_techs if configured else None,
+            "installation_required": installation_required,
+            "installation_minutes": installation if configured else None,
+            "technicians_available": effective_available if configured else None,
+            "status": status,
+            "source": "Demo maintenance knowledge base" if configured else "Not configured",
+        }
 
     def start(self, request: RecoveryRequest):
         if self.calle.mode == "live" and not request.live_confirmed:
@@ -35,10 +64,11 @@ class RecoveryEngine:
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
+        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
 
         state = {
             "run_id": run_id, "request": request.model_dump(),
-            "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": "demo maintenance knowledge base" if task_name != "unknown" else "fallback demo value"},
+            "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence},
             "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0,
             "approved": False
         }
@@ -52,6 +82,28 @@ class RecoveryEngine:
             IDEMPOTENCY[key] = run_id
         return self._snapshot(run_id)
 
+    async def start_async(self, request: RecoveryRequest):
+        if self.calle.mode != "live":
+            return self.start(request)
+        if not request.live_confirmed:
+            raise ValueError("LIVE mode requires explicit confirmation before initiating phone calls.")
+        key = request.idempotency_key
+        if key and key in IDEMPOTENCY:
+            return self._snapshot(IDEMPOTENCY[key])
+        run_id = str(uuid.uuid4())[:8]
+        task_name, task_info = self._maintenance_info(request)
+        required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
+        installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
+        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
+        state = {"run_id": run_id, "request": request.model_dump(), "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}, "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0, "approved": False, "calls": []}
+        # Live mode starts with one supplier; replanning decides whether another is needed.
+        await self._call_and_store_async(state, request, 0)
+        state["next_supplier_index"] = 1
+        RUNS[run_id] = state
+        if key:
+            IDEMPOTENCY[key] = run_id
+        return self._snapshot(run_id)
+
     def _call_and_store(self, state, request, index):
         supplier = request.suppliers[index]
         try:
@@ -60,6 +112,23 @@ class RecoveryEngine:
         except Exception as exc:
             offer = Offer(supplier=supplier.name, phone=supplier.phone, status="CALL FAILED", notes=str(exc), source="call-e")
         state["offers"].append(offer.model_dump())
+
+    async def _call_and_store_async(self, state, request, index):
+        supplier = request.suppliers[index]
+        try:
+            data = await self.calle.call_supplier_async(supplier, request, state["offers"], idempotency_key=f"restartai-{state['run_id']}-{index}")
+            offer = Offer(**data)
+        except Exception as exc:
+            call_id = getattr(exc, "call_id", None)
+            record = self.calle.calls.get(call_id or "", {})
+            diagnostics = getattr(exc, "diagnostics", None) or record.get("diagnostics", {})
+            category = diagnostics.get("category")
+            human_message = diagnostics.get("human_message")
+            notes = human_message or str(exc)
+            offer = Offer(supplier=supplier.name, phone=supplier.phone, status="SUPPLIER UNAVAILABLE" if category == "supplier_unavailable" else "CALL FAILED", notes=notes, source="CALL-E LIVE CALL", call_id=call_id or record.get("call_id"))
+            state.setdefault("call_failures", []).append({"supplier": supplier.name, "phone": supplier.phone, "call_id": call_id or record.get("call_id"), "category": category, "human_message": human_message, "failure_code": diagnostics.get("failure_code"), "failure_message": diagnostics.get("failure_message"), "attempt_failure_code": diagnostics.get("attempt_failure_code"), "attempt_failure_message": diagnostics.get("attempt_failure_message"), "recipient_status": diagnostics.get("recipient_status"), "attempt_status": diagnostics.get("attempt_status")})
+        state["offers"].append(offer.model_dump())
+        state["calls"] = list(self.calle.calls.values())
 
     def replan(self, run_id):
         if run_id not in RUNS:
@@ -89,8 +158,30 @@ class RecoveryEngine:
             "task": task_name,
             "required_technicians": request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"],
             "installation_minutes": request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"],
-            "source": "demo maintenance knowledge base"
+            "source": "demo maintenance knowledge base",
+            "technician_intelligence": self._maintenance_state(task_name, task_info, state["maintenance"]["required_technicians"], state["maintenance"]["installation_minutes"], request.available_technicians)
         }
+        state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
+        state["stage"] = "replanned"
+        return self._snapshot(run_id)
+
+    async def replan_async(self, run_id):
+        if self.calle.mode != "live":
+            return self.replan(run_id)
+        if run_id not in RUNS:
+            raise KeyError("Run not found")
+        state = RUNS[run_id]
+        request = RecoveryRequest(**state["request"])
+        if state["next_supplier_index"] < len(request.suppliers):
+            remaining = self._remaining_quantity(state["offers"], request.quantity)
+            if remaining > 0:
+                await self._call_and_store_async(state, request, state["next_supplier_index"])
+                state["next_supplier_index"] += 1
+        task_name, task_info = self._maintenance_info(request)
+        required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
+        installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
+        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
+        state["maintenance"] = {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}
         state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
         state["stage"] = "replanned"
         return self._snapshot(run_id)
@@ -156,6 +247,9 @@ class RecoveryEngine:
                     compatibility_confidence=min(x.compatibility_confidence for x in legs),
                     required_technicians=maintenance["required_technicians"],
                     available_technicians=request.available_technicians,
+                    required_technician_capability=maintenance.get("technician_intelligence", {}).get("required"),
+                    installation_required=maintenance.get("technician_intelligence", {}).get("installation_required"),
+                    technician_status=maintenance.get("technician_intelligence", {}).get("status", "not configured"),
                     feasible=not reasons,
                     infeasibility_reasons=reasons
                 ))
@@ -164,10 +258,15 @@ class RecoveryEngine:
     def _snapshot(self, run_id):
         state = RUNS[run_id]
         offers = state["offers"]
+        safe_offers = [{**offer, "phone": self.calle.mask_phone(offer["phone"])} for offer in offers]
+        safe_request = {**state["request"], "suppliers": [{**supplier, "phone": self.calle.mask_phone(supplier["phone"])} for supplier in state["request"]["suppliers"]]}
         return {
-            "run_id": run_id, "stage": state["stage"], "request": state["request"],
-            "maintenance": state["maintenance"], "offers": offers, "plans": state["plans"],
+            "run_id": run_id, "stage": state["stage"], "request": safe_request,
+            "maintenance": state["maintenance"], "offers": safe_offers, "plans": state["plans"],
+            "technician_intelligence": state["maintenance"].get("technician_intelligence", {}),
             "recommended_plan": state["plans"][0] if state["plans"] else None,
             "approved": state["approved"], "mode": self.calle.mode,
+            "calls": state.get("calls", []),
+            "call_failures": state.get("call_failures", []),
             "next_supplier_available": state["next_supplier_index"] < len(RecoveryRequest(**state["request"]).suppliers)
         }

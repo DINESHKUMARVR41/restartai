@@ -33,6 +33,16 @@ class RecoveryRequest(BaseModel):
     live_confirmed: bool = False
 
 
+class TestCallRequest(BaseModel):
+    phone: str
+    supplier_name: str = "Test Supplier"
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, value: str) -> str:
+        return value.strip()
+
+
 class Offer(BaseModel):
     supplier: str
     phone: str
@@ -72,3 +82,6 @@ class RecoveryPlan(BaseModel):
     available_technicians: int
     feasible: bool
     infeasibility_reasons: List[str] = []
+    required_technician_capability: Optional[str] = None
+    installation_required: Optional[bool] = None
+    technician_status: str = "not configured"

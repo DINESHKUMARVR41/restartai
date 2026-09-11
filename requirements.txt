@@ -3,5 +3,5 @@ uvicorn[standard]
 jinja2
 python-dotenv
 pydantic>=2
-calle-ai
+httpx
 pytest
