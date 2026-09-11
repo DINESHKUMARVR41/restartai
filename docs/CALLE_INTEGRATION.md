@@ -1,41 +1,66 @@
 # CALL-E integration
 
-The project uses the official Python server SDK:
+RestartAI keeps CALL-E on the FastAPI backend. The browser never receives the API key.
 
-`pip install calle-ai`
+## Modes
 
-The SDK is used only on the FastAPI backend.
+### DEMO
 
-## Why
+```env
+CALL_E_MODE=demo
+```
 
-CALL-E is not something that becomes active merely because its name appears in the code. The application must actually call the CALL-E Developer API/SDK. You also need a CALL-E account and API key for live calls.
+No API calls and no phone calls. Supplier responses are deterministic.
 
-The frontend never receives the API key.
+### LIVE
 
-## Live flow
+```env
+CALL_E_MODE=live
+CALLE_API_KEY=your_local_secret
+CALLE_BASE_URL=https://api.heycall-e.com
+```
 
-1. User starts recovery.
-2. FastAPI creates a supplier call task.
-3. `CalleClient.calls.create_and_wait(...)` executes the phone task.
-4. CALL-E returns structured supplier information.
-5. Recovery engine stores the result.
-6. A partial-stock result triggers replanning.
-7. The app calls another supplier.
-8. The recovery engine compares plans.
-9. Human approves the recommendation.
+The live path uses the official Python SDK imported server-side:
 
-## Credentials
+```python
+from calle import CalleClient
+client.calls.create_and_wait(...)
+```
 
-Set:
+The current CALL-E API supports `result_schema` and `recipient_result_schema` for structured call results and requires a stable `Idempotency-Key` for safe retries. citeturn0search4
 
-`CALLE_API_KEY=...`
+## Safety
 
-and:
+Live calls are side effects. RestartAI therefore:
 
-`CALL_E_MODE=live`
+- requires explicit LIVE confirmation;
+- accepts supplier numbers from user/configured input rather than inventing them;
+- validates live numbers as E.164;
+- keeps credentials server-side;
+- uses stable business idempotency keys;
+- never authorizes purchases;
+- reports provider failures as user-facing errors instead of exposing Python tracebacks.
 
-Use real authorized numbers only. Keep an idempotency key for each business call so retries do not create duplicate calls.
+## Adaptive calls
 
-## Hackathon requirement
+The first wave calls up to three configured suppliers.
 
-The CALL-E hackathon requires a functional project using CALL-E's API/SDKs or its Skill/MCP integrations, and requires a pull request to the `awesome-phone-call-agents` repository as part of submission.
+When a committed quantity shortfall remains, each **REPLAN / CALL NEXT SUPPLIER** action contacts one additional configured supplier. The task sent to the later supplier contains the remaining quantity and the information already discovered, so the call is context-aware rather than a duplicate generic prompt.
+
+## Structured extraction
+
+CALL-E is responsible for extracting conversational facts such as quantity, price and timing. RestartAI's deterministic Python engine is responsible for:
+
+- quantity allocation
+- feasibility
+- technician constraints
+- recovery time
+- downtime exposure
+- total economic exposure
+- plan ranking
+
+Do not use an LLM for final arithmetic or operational constraints.
+
+## Live testing
+
+Use only authorized/consenting test numbers and a real API key stored in local `.env`. Never commit `.env`, API keys, or real phone numbers to GitHub.

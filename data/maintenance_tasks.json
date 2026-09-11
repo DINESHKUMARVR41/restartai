@@ -1,0 +1,86 @@
+{
+  "bearing_replacement": {
+    "keywords": [
+      "bearing",
+      "6205",
+      "6205-2rs"
+    ],
+    "required_technicians": 2,
+    "installation_minutes": 30
+  },
+  "conveyor_belt_replacement": {
+    "keywords": [
+      "conveyor belt",
+      "belt replacement"
+    ],
+    "required_technicians": 3,
+    "installation_minutes": 90
+  },
+  "motor_replacement": {
+    "keywords": [
+      "motor",
+      "motor replacement"
+    ],
+    "required_technicians": 3,
+    "installation_minutes": 120
+  },
+  "hydraulic_hose_replacement": {
+    "keywords": [
+      "hydraulic hose",
+      "hydraulic"
+    ],
+    "required_technicians": 2,
+    "installation_minutes": 45
+  },
+  "pump_seal_replacement": {
+    "keywords": [
+      "pump seal",
+      "seal replacement",
+      "pump"
+    ],
+    "required_technicians": 2,
+    "installation_minutes": 60
+  },
+  "sensor_replacement": {
+    "keywords": [
+      "sensor",
+      "proximity sensor",
+      "temperature sensor"
+    ],
+    "required_technicians": 1,
+    "installation_minutes": 20
+  },
+  "pneumatic_valve_replacement": {
+    "keywords": [
+      "pneumatic valve",
+      "valve"
+    ],
+    "required_technicians": 2,
+    "installation_minutes": 40
+  },
+  "contactor_replacement": {
+    "keywords": [
+      "contactor",
+      "electrical contactor"
+    ],
+    "required_technicians": 1,
+    "installation_minutes": 25
+  },
+  "gearbox_inspection": {
+    "keywords": [
+      "gearbox",
+      "gear box"
+    ],
+    "required_technicians": 2,
+    "installation_minutes": 60
+  },
+  "cutting_tool_replacement": {
+    "keywords": [
+      "cutting tool",
+      "cutter",
+      "tool insert"
+    ],
+    "required_technicians": 1,
+    "installation_minutes": 15
+  }
+}

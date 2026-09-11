@@ -1,67 +1,46 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>RestartAI — Emergency Production Recovery</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RestartAI — Emergency Production Recovery</title><link rel="stylesheet" href="/static/styles.css"></head>
 <body>
-<header>
-  <div class="brand">RESTART<span>AI</span></div>
-  <div class="pill">CALL-E POWERED</div>
-</header>
-
+<header><div class="brand">RESTART<span>AI</span></div><div id="modePill" class="pill">MODE: DEMO</div></header>
 <main>
-<section class="hero">
-  <div>
-    <p class="eyebrow">EMERGENCY PRODUCTION RECOVERY</p>
-    <h1>When the machine stops,<br><span>the agent starts calling.</span></h1>
-    <p class="sub">RestartAI calls suppliers, adapts to live availability, and builds the fastest feasible recovery plan — even when no single supplier has everything.</p>
-  </div>
-  <div class="status-card">
-    <div class="status-dot"></div>
-    <div><b>Agent ready</b><small>Human approval required before purchase</small></div>
-  </div>
+<section class="hero"><div><p class="eyebrow">EMERGENCY PRODUCTION RECOVERY AGENT</p><h1>When the machine stops,<br><span>the agent starts calling.</span></h1><p class="sub">RestartAI turns fragmented supplier conversations into a dynamically replanned production-recovery plan.</p></div><div class="status-card"><div class="status-dot"></div><div><b>Human approval required</b><small>No automated purchase is executed</small></div></div></section>
+
+<div id="error" class="error hidden"></div>
+<section class="panel">
+<div class="panel-title"><h2>0. Call mode</h2><select id="mode" onchange="updateModeUI()"><option value="demo">DEMO</option><option value="live">LIVE CALL-E</option></select></div>
+<p class="hint">DEMO is deterministic and works offline. LIVE places real calls only to numbers you configure below.</p>
+<div id="liveBox" class="live-box hidden"><b>LIVE MODE</b><p>This action will initiate real phone calls to the configured authorized numbers. Use valid E.164 numbers and only numbers you are authorized to call.</p><label><input type="checkbox" id="liveConfirm"> I understand and explicitly authorize the live calls.</label></div>
 </section>
 
 <section class="grid">
-  <div class="panel">
-    <h2>1. Production incident</h2>
-    <div class="fields">
-      <label>Machine<input id="machine" value="CNC Production Line 4"></label>
-      <label>Part number<input id="part" value="SKF 6205-2RS"></label>
-      <label>Description<input id="desc" value="Deep-groove ball bearing"></label>
-      <label>Quantity<input id="qty" type="number" value="20"></label>
-      <label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
-      <label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
-    </div>
-    <label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
-    <button onclick="startRecovery()">START RECOVERY</button>
-    <p class="hint">Demo mode uses simulated supplier responses. Live mode uses CALL-E.</p>
-  </div>
+<div class="panel"><h2>1. Production incident</h2>
+<div class="fields">
+<label>Machine<input id="machine" value="CNC Production Line 4"></label>
+<label>Part number<input id="part" value="SKF 6205-2RS"></label>
+<label>Description<input id="desc" value="Deep-groove ball bearing"></label>
+<label>Quantity<input id="qty" type="number" value="20"></label>
+<label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
+<label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
+<label>Available technicians<input id="techs" type="number" value="3" min="0"></label>
+<label>Required technicians override (optional)<input id="techOverride" type="number" min="0" placeholder="Auto"></label>
+<label>Installation override (minutes, optional)<input id="installOverride" type="number" min="0" placeholder="Auto"></label>
+</div>
+<label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
+<button id="startBtn" onclick="startRecovery()">START RECOVERY</button></div>
 
-  <div class="panel">
-    <div class="panel-title"><h2>2. Live supplier intelligence</h2><span id="stage">WAITING</span></div>
-    <div id="offers" class="offers empty">Start a recovery run to see supplier calls.</div>
-  </div>
-</section>
+<div class="panel"><div class="panel-title"><h2>2. Live supplier intelligence</h2><span id="stage">WAITING</span></div>
+<div id="offers" class="offers empty">Start a recovery run to see supplier calls.</div>
+<div class="supplier-inputs"><b>Configured supplier phone numbers</b><span class="hint">Required only for LIVE; demo ignores them.</span>
+<label>Supplier A<input class="phone" id="phone1" value="+10000000001" disabled></label>
+<label>Supplier B<input class="phone" id="phone2" value="+10000000002" disabled></label>
+<label>Supplier C<input class="phone" id="phone3" value="+10000000003" disabled></label>
+<label>Supplier D<input class="phone" id="phone4" value="+10000000004" disabled></label></div>
+</div></section>
 
-<section id="replanPanel" class="panel hidden">
-  <div class="panel-title">
-    <div><h2>3. Agentic replanning</h2><p>The agent discovered partial stock. It is solving for the missing quantity.</p></div>
-    <button class="secondary" onclick="replan()">REPLAN NOW</button>
-  </div>
-  <div id="replanMessage" class="replan-box">Waiting for the initial supplier wave…</div>
-</section>
+<section id="replanPanel" class="panel hidden"><div class="panel-title"><div><h2>3. Agentic replanning</h2><p>RestartAI uses the discovered shortfall to decide whether another supplier call is useful.</p></div><button class="secondary" onclick="replan()">REPLAN / CALL NEXT SUPPLIER</button></div><div id="replanMessage" class="replan-box"></div></section>
 
-<section id="planPanel" class="panel hidden">
-  <div class="panel-title"><h2>4. Recovery plan</h2><span class="recommended">RECOMMENDED</span></div>
-  <div id="plan"></div>
-  <button onclick="approve()">APPROVE RECOVERY PLAN</button>
-</section>
-</main>
+<section class="panel"><h2>Technician intelligence</h2><div class="tech-row"><div><small>Required</small><b id="requiredTech">—</b></div><div><small>Installation</small><b id="installTime">—</b></div><div><small>Status</small><b id="techStatus">—</b></div></div><p class="hint">Values come from the local demo maintenance knowledge base or the user's override. They are illustrative demo values, not universal industrial standards.</p></section>
 
-<script src="/static/app.js"></script>
-</body>
-</html>
+<section id="planPanel" class="panel hidden"><div class="panel-title"><h2>4. Recovery plan</h2><span class="recommended">RECOMMENDED</span></div><div id="plan"></div><div id="approval" class="approval">No purchase initiated — approval is required.</div><button id="approveBtn" onclick="approve()">APPROVE RECOVERY PLAN</button></section>
+</main><script src="/static/app.js"></script></body></html>
