@@ -19,14 +19,17 @@ class RecoveryEngine:
         path = Path(__file__).resolve().parent.parent / "data" / "maintenance_tasks.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _maintenance_info(self, request):
-        text = f"{request.part_number} {request.part_description}".lower()
+    def _maintenance_match(self, part_number, part_description):
+        text = f"{part_number} {part_description}".lower()
         for task, info in self.maintenance.items():
             if any(k.lower() in text for k in info["keywords"]):
                 logger.info("Maintenance task requested=%s found=yes technician_data=%s", text, bool(info.get("required_technician")))
                 return task, info
         logger.info("Maintenance task requested=%s found=no technician_data=no", text)
         return "unknown", {"required_technicians": 1, "installation_minutes": 30, "configured": False}
+
+    def _maintenance_info(self, request):
+        return self._maintenance_match(request.part_number, request.part_description)
 
     @staticmethod
     def _maintenance_state(task_name, task_info, required_techs, installation, available_techs):
@@ -53,6 +56,24 @@ class RecoveryEngine:
             "source": "Demo maintenance knowledge base" if configured else "Not configured",
         }
 
+    def maintenance_intelligence(self, part_number, part_description, available_technicians=3, required_technicians_override=None, installation_minutes_override=None):
+        task_name, task_info = self._maintenance_match(part_number, part_description)
+        configured = task_name != "unknown" and task_info.get("configured", True) and bool(task_info.get("required_technician"))
+        required_techs = required_technicians_override if configured and required_technicians_override is not None else task_info.get("required_technicians") if configured else None
+        installation = installation_minutes_override if configured and installation_minutes_override is not None else task_info.get("installation_minutes") if configured else None
+        state = self._maintenance_state(task_name, task_info, required_techs, installation, available_technicians)
+        return {
+            "configured": configured,
+            "task": task_name,
+            "required_technician": state["required"],
+            "required_technicians": state["required_count"],
+            "installation_required": state["installation_required"],
+            "installation_minutes": state["installation_minutes"],
+            "technicians_available": state["technicians_available"],
+            "status": state["status"],
+            "source": state["source"],
+        }
+
     def start(self, request: RecoveryRequest):
         if self.calle.mode == "live" and not request.live_confirmed:
             raise ValueError("LIVE mode requires explicit confirmation before initiating phone calls.")
@@ -64,7 +85,7 @@ class RecoveryEngine:
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
-        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
+        technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
 
         state = {
             "run_id": run_id, "request": request.model_dump(),
@@ -94,7 +115,7 @@ class RecoveryEngine:
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
-        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
+        technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
         state = {"run_id": run_id, "request": request.model_dump(), "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}, "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0, "approved": False, "calls": []}
         # Live mode starts with one supplier; replanning decides whether another is needed.
         await self._call_and_store_async(state, request, 0)
@@ -159,7 +180,7 @@ class RecoveryEngine:
             "required_technicians": request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"],
             "installation_minutes": request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"],
             "source": "demo maintenance knowledge base",
-            "technician_intelligence": self._maintenance_state(task_name, task_info, state["maintenance"]["required_technicians"], state["maintenance"]["installation_minutes"], request.available_technicians)
+            "technician_intelligence": self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
         }
         state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
         state["stage"] = "replanned"
@@ -180,7 +201,7 @@ class RecoveryEngine:
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
-        technician_intelligence = self._maintenance_state(task_name, task_info, required_techs, installation, request.available_technicians)
+        technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
         state["maintenance"] = {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}
         state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
         state["stage"] = "replanned"
@@ -247,7 +268,7 @@ class RecoveryEngine:
                     compatibility_confidence=min(x.compatibility_confidence for x in legs),
                     required_technicians=maintenance["required_technicians"],
                     available_technicians=request.available_technicians,
-                    required_technician_capability=maintenance.get("technician_intelligence", {}).get("required"),
+                    required_technician_capability=maintenance.get("technician_intelligence", {}).get("required_technician"),
                     installation_required=maintenance.get("technician_intelligence", {}).get("installation_required"),
                     technician_status=maintenance.get("technician_intelligence", {}).get("status", "not configured"),
                     feasible=not reasons,

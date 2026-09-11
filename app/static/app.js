@@ -1,4 +1,5 @@
 let runId=null;
+let maintenanceTimer=null;
 const $ = id => document.getElementById(id);
 function money(x){return "₹"+Number(x||0).toLocaleString("en-IN",{maximumFractionDigits:2})}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
@@ -16,6 +17,43 @@ async function readJsonResponse(response){
   return data;
 }
 function safeText(value){return value===undefined||value===null||value===""?"Not available":typeof value==="object"?JSON.stringify(value):String(value)}
+
+function renderTechnician(technician){
+  const configured=technician.configured===true;
+  $("requiredTech").textContent=configured
+    ? `${safeText(technician.required_technician)} · ${safeText(technician.required_technicians)} technicians`
+    : "Not configured";
+  $("installTime").textContent=configured
+    ? technician.installation_required===true
+      ? `Required${technician.installation_minutes!=null?` · ${technician.installation_minutes} min`:""}`
+      : "Not required"
+    : "Not configured";
+  $("techniciansAvailable").textContent=configured&&technician.technicians_available!=null
+    ? String(technician.technicians_available) : "Not configured";
+  $("techStatus").textContent=(technician.status||"not configured").toUpperCase();
+  $("techSource").textContent=`Source: ${technician.source||"Not configured"}`;
+}
+
+async function loadMaintenanceIntelligence(){
+  const params=new URLSearchParams({
+    part_number:$('part').value.trim(),
+    part_description:$('desc').value.trim(),
+    available_technicians:$('techs').value||"3"
+  });
+  if($('techOverride').value) params.set('required_technicians_override',$('techOverride').value);
+  if($('installOverride').value) params.set('installation_minutes_override',$('installOverride').value);
+  try{
+    const response=await fetch(`/api/maintenance/intelligence?${params}`);
+    renderTechnician(await readJsonResponse(response));
+  }catch(error){
+    renderTechnician({configured:false,status:"not configured",source:"Not configured"});
+  }
+}
+
+function scheduleMaintenanceIntelligence(){
+  clearTimeout(maintenanceTimer);
+  maintenanceTimer=setTimeout(loadMaintenanceIntelligence,300);
+}
 
 function supplierPayload(){
   return [1,2,3,4].map((i)=>({
@@ -97,13 +135,12 @@ function render(data){
       technicians_available:data.maintenance.technicians_available??data.request?.available_technicians,
       status:null
     };
-    $("requiredTech").textContent=safeText(technician.required);
-    $("installTime").textContent=technician.installation_required===true
-      ? `Required${technician.installation_minutes?` · ${technician.installation_minutes} min`:""}`
-      : technician.installation_required===false ? "Not required" : "Not configured";
-    $("techniciansAvailable").textContent=technician.technicians_available===undefined||technician.technicians_available===null
-      ? "Not configured" : String(technician.technicians_available);
-    $("techStatus").textContent=(technician.status||"not configured").toUpperCase();
+    renderTechnician(technician.required_technician===undefined?{
+      configured:Boolean(technician.required), required_technician:technician.required,
+      required_technicians:technician.required_count, installation_required:technician.installation_required,
+      installation_minutes:technician.installation_minutes, technicians_available:technician.technicians_available,
+      status:technician.status, source:technician.source
+    }:technician);
   }
   const p=data.recommended_plan;
   if(p){
@@ -132,6 +169,7 @@ async function loadConfig(){
     const r=await fetch("/api/config"); const c=await readJsonResponse(r);
     $("mode").value=c.mode;
     updateModeUI();
+    loadMaintenanceIntelligence();
   }catch{}
 }
 function updateModeUI(){
@@ -206,3 +244,7 @@ function diagnosticHtml(failureCode,failureMessage,diagnostics){
   return `<div class="bad"><b>Failure code:</b> ${esc(safeText(failureCode))}<br><b>Failure message:</b> ${esc(safeText(failureMessage))}</div><details class="technical-details"><summary>Technical details</summary><div>Recipient status: ${esc(safeText(diagnostics.recipient_status))}</div><div>Attempt status: ${esc(safeText(diagnostics.attempt_status))}</div><div>Attempt failure code: ${esc(safeText(diagnostics.attempt_failure_code))}</div><div>Attempt failure message: ${esc(safeText(diagnostics.attempt_failure_message))}</div><div>Structured result: ${diagnostics.structured_result&&Object.keys(diagnostics.structured_result).length?"Available":"Not available"}</div><div>Transcript: ${diagnostics.transcript_available?"Available":"Not available"}</div></details>`;
 }
 loadConfig();
+["part","desc","techs","techOverride","installOverride"].forEach(id=>{
+  $(id).addEventListener("input",scheduleMaintenanceIntelligence);
+  $(id).addEventListener("change",scheduleMaintenanceIntelligence);
+});

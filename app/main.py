@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -48,6 +48,24 @@ def index(request: Request):
 @app.get("/api/config")
 def config():
     return {"mode": calle_service.mode, "live": calle_service.mode == "live"}
+
+
+@app.get("/api/maintenance/intelligence")
+def maintenance_intelligence(
+    part_number: str = "",
+    part_description: str = "",
+    available_technicians: int = Query(default=3, ge=0),
+    required_technicians_override: int | None = Query(default=None, ge=0),
+    installation_minutes_override: int | None = Query(default=None, ge=0),
+):
+    return engine.maintenance_intelligence(
+        part_number,
+        part_description,
+        available_technicians,
+        required_technicians_override,
+        installation_minutes_override,
+    )
+
 
 
 @app.post("/api/recovery/start")

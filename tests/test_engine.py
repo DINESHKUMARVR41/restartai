@@ -99,7 +99,7 @@ def test_technician_intelligence_loads_from_maintenance_data():
     engine = RecoveryEngine(CalleService())
     data = engine.start(request())
     technician = data["technician_intelligence"]
-    assert technician["required"] == "Mechanical Maintenance Technician"
+    assert technician["required_technician"] == "Mechanical Maintenance Technician"
     assert technician["installation_required"] is True
     assert technician["installation_minutes"] == 30
     assert technician["technicians_available"] == 3
@@ -110,7 +110,7 @@ def test_technician_override_takes_precedence_for_availability():
     engine = RecoveryEngine(CalleService())
     data = engine.start(request(available_technicians=0, required_technicians_override=1))
     technician = data["technician_intelligence"]
-    assert technician["required_count"] == 1
+    assert technician["required_technicians"] == 1
     assert technician["technicians_available"] == 0
     assert technician["status"] == "unavailable"
 
@@ -120,8 +120,55 @@ def test_unknown_maintenance_task_is_not_configured():
     data = engine.start(request(part_number="unlisted-part", part_description="unlisted component"))
     technician = data["technician_intelligence"]
     assert technician["status"] == "not configured"
-    assert technician["required"] is None
+    assert technician["required_technician"] is None
     assert technician["technicians_available"] is None
+
+
+def test_maintenance_intelligence_bearing_endpoint_shape():
+    engine = RecoveryEngine(CalleService())
+    intelligence = engine.maintenance_intelligence("6205", "Bearing 6205-2RS", 3)
+    assert intelligence == {
+        "configured": True,
+        "task": "bearing_replacement",
+        "required_technician": "Mechanical Maintenance Technician",
+        "required_technicians": 2,
+        "installation_required": True,
+        "installation_minutes": 30,
+        "technicians_available": 3,
+        "status": "available",
+        "source": "Demo maintenance knowledge base",
+    }
+
+
+def test_maintenance_intelligence_shortage_and_override():
+    engine = RecoveryEngine(CalleService())
+    assert engine.maintenance_intelligence("6205", "Bearing 6205-2RS", 1)["status"] == "unavailable"
+    overridden = engine.maintenance_intelligence("6205", "Bearing 6205-2RS", 3, required_technicians_override=4)
+    assert overridden["required_technicians"] == 4
+    assert overridden["status"] == "unavailable"
+
+
+def test_maintenance_intelligence_motor_and_unknown():
+    engine = RecoveryEngine(CalleService())
+    motor = engine.maintenance_intelligence("", "Motor replacement", 3)
+    assert motor["task"] == "motor_replacement"
+    assert motor["required_technicians"] == 3
+    assert motor["installation_minutes"] == 120
+    assert motor["required_technician"] == "Mechanical Maintenance Technician"
+    unknown = engine.maintenance_intelligence("", "Something completely unknown", 3)
+    assert unknown["configured"] is False
+    assert unknown["required_technician"] is None
+    assert unknown["installation_minutes"] is None
+    assert unknown["technicians_available"] is None
+    assert unknown["status"] == "not configured"
+
+
+def test_recovery_snapshot_matches_maintenance_intelligence():
+    engine = RecoveryEngine(CalleService())
+    request_data = request(part_number="6205", part_description="Bearing 6205-2RS")
+    snapshot = engine.start(request_data)
+    expected = engine.maintenance_intelligence("6205", "Bearing 6205-2RS", 3)
+    assert snapshot["technician_intelligence"] == expected
 
 
 def test_live_supplier_unavailable_is_not_confirmed_and_next_supplier_can_succeed():
