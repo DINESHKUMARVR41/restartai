@@ -195,3 +195,9 @@ Run state is intentionally in memory to keep the hackathon MVP simple. A server 
 > “We did not find the cheapest supplier. We found the fastest feasible way to restart production.”
 
 The important moment is the transition from **8 units available** to **12-unit shortfall**, followed by an adaptive call to the next supplier and a deterministic C+D recovery plan.
+
+
+### Supplier phone numbers
+The web UI now allows Supplier A–D phone numbers to be edited directly.
+Use valid E.164 numbers (for example, `+919876543210`) for LIVE CALL-E mode.
+Only enter numbers you are authorized to call. DEMO mode does not place calls.

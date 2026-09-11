@@ -115,6 +115,6 @@ function updateModeUI(){
   const live=$("mode").value==="live";
   $("modePill").textContent=live?"MODE: LIVE CALL-E":"MODE: DEMO";
   $("liveBox").classList.toggle("hidden",!live);
-  document.querySelectorAll(".phone").forEach(x=>x.disabled=!live);
+  document.querySelectorAll(".phone").forEach(x=>x.disabled=false);
 }
 loadConfig();

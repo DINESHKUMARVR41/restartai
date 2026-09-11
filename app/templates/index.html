@@ -31,11 +31,11 @@
 
 <div class="panel"><div class="panel-title"><h2>2. Live supplier intelligence</h2><span id="stage">WAITING</span></div>
 <div id="offers" class="offers empty">Start a recovery run to see supplier calls.</div>
-<div class="supplier-inputs"><b>Configured supplier phone numbers</b><span class="hint">Required only for LIVE; demo ignores them.</span>
-<label>Supplier A<input class="phone" id="phone1" value="+10000000001" disabled></label>
-<label>Supplier B<input class="phone" id="phone2" value="+10000000002" disabled></label>
-<label>Supplier C<input class="phone" id="phone3" value="+10000000003" disabled></label>
-<label>Supplier D<input class="phone" id="phone4" value="+10000000004" disabled></label></div>
+<div class="supplier-inputs"><b>Configured supplier phone numbers</b><span class="hint">Enter the supplier numbers you are authorized to call. LIVE uses these numbers; DEMO ignores them.</span>
+<label>Supplier A phone<input class="phone" id="phone1" value="+919999999001" type="tel" placeholder="+919876543210"></label>
+<label>Supplier B phone<input class="phone" id="phone2" value="+919999999002" type="tel" placeholder="+919876543210"></label>
+<label>Supplier C phone<input class="phone" id="phone3" value="+919999999003" type="tel" placeholder="+919876543210"></label>
+<label>Supplier D phone<input class="phone" id="phone4" value="+919999999004" type="tel" placeholder="+919876543210"></label></div>
 </div></section>
 
 <section id="replanPanel" class="panel hidden"><div class="panel-title"><div><h2>3. Agentic replanning</h2><p>RestartAI uses the discovered shortfall to decide whether another supplier call is useful.</p></div><button class="secondary" onclick="replan()">REPLAN / CALL NEXT SUPPLIER</button></div><div id="replanMessage" class="replan-box"></div></section>
