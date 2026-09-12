@@ -23,8 +23,8 @@
 <label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
 <label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
 <label>Available technicians<input id="techs" type="number" value="3" min="0"></label>
-<label>Required technicians override (optional)<input id="techOverride" type="number" min="0" placeholder="Auto"></label>
-<label>Installation override (minutes, optional)<input id="installOverride" type="number" min="0" placeholder="Auto"></label>
+<label>Required technicians<input id="techOverride" type="number" value="1" min="0"></label>
+<label>Installation time (minutes)<input id="installOverride" type="number" value="30" min="0"></label>
 </div>
 <label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
 <button id="startBtn" onclick="startRecovery()">START RECOVERY</button></div>
@@ -41,7 +41,8 @@
 
 <section id="replanPanel" class="panel hidden"><div class="panel-title"><div><h2>3. Agentic replanning</h2><p>RestartAI uses the discovered shortfall to decide whether another supplier call is useful.</p></div><button class="secondary" onclick="replan()">REPLAN / CALL NEXT SUPPLIER</button></div><div id="replanMessage" class="replan-box"></div></section>
 
-<section class="panel"><div class="panel-title"><h2>Technician intelligence</h2><span id="techSource" class="hint">Source: Not configured</span></div><div class="tech-row"><div><small>Required</small><b id="requiredTech">Not configured</b></div><div><small>Installation</small><b id="installTime">Not configured</b></div><div><small>Technicians available</small><b id="techniciansAvailable">Not configured</b></div><div><small>Status</small><b id="techStatus">NOT CONFIGURED</b></div></div><p class="hint">Values come from the Demo maintenance knowledge base or the user's override. They are illustrative demo values, not universal industrial standards.</p></section>
+<section id="aiPanel" class="panel hidden"><div class="panel-title"><div><h2>5. AI supplier decision</h2><p>Gemini and Groq evaluate confirmed CALL-E offers. Hard recovery constraints remain deterministic.</p></div><span id="aiStatus" class="hint">WAITING</span></div><button class="secondary" onclick="getAIRecommendation()">GET AI RECOMMENDATION</button><div id="aiDecision" class="ai-decision"></div></section>
+<section id="chatPanel" class="panel"><div class="panel-title"><div><h2>6. RestartAI assistant</h2><p>Ask about the current incident, supplier calls, recovery plan, or next action.</p></div><span class="hint">Gemini / Groq</span></div><div id="chatMessages" class="chat-messages"><div class="chat-msg assistant">I can explain the current recovery run and supplier results. I will not invent missing supplier facts.</div></div><div class="chat-compose"><input id="chatInput" placeholder="Ask: Which supplier is best and why?"><button class="secondary" onclick="sendChat()">SEND</button></div></section>
 
-<section id="planPanel" class="panel hidden"><div class="panel-title"><h2>4. Recovery plan</h2><span class="recommended">RECOMMENDED</span></div><div id="plan"></div><div id="approval" class="approval">No purchase initiated — approval is required.</div><button id="approveBtn" onclick="approve()">APPROVE RECOVERY PLAN</button></section>
+<section id="planPanel" class="panel hidden"><div class="panel-title"><h2>4. Recovery plan</h2><span class="recommended">RECOMMENDED</span></div><div id="plan"></div><div id="approval" class="approval">No purchase initiated — approval is required.</div><div class="plan-actions"><button id="approveBtn" onclick="approve()">APPROVE RECOVERY PLAN</button><button class="secondary" onclick="downloadReport()">DOWNLOAD RECOVERY REPORT</button></div></section>
 </main><script src="/static/app.js"></script></body></html>

@@ -1,60 +1,5 @@
 let runId=null;
-let maintenanceTimer=null;
-const $ = id => document.getElementById(id);
-function money(x){return "₹"+Number(x||0).toLocaleString("en-IN",{maximumFractionDigits:2})}
-function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
-
-function showError(msg){
-  $("error").textContent=msg;
-  $("error").classList.remove("hidden");
-}
-function clearError(){$("error").classList.add("hidden");$("error").textContent=""}
-async function readJsonResponse(response){
-  const text=await response.text();
-  let data;
-  try{data=text?JSON.parse(text):{}}catch{throw new Error(`Server returned non-JSON response (${response.status}): ${text.slice(0,300)}`)}
-  if(!response.ok) throw new Error(data.error||data.detail||data.message||"Request failed");
-  return data;
-}
-function safeText(value){return value===undefined||value===null||value===""?"Not available":typeof value==="object"?JSON.stringify(value):String(value)}
-
-function renderTechnician(technician){
-  const configured=technician.configured===true;
-  $("requiredTech").textContent=configured
-    ? `${safeText(technician.required_technician)} · ${safeText(technician.required_technicians)} technicians`
-    : "Not configured";
-  $("installTime").textContent=configured
-    ? technician.installation_required===true
-      ? `Required${technician.installation_minutes!=null?` · ${technician.installation_minutes} min`:""}`
-      : "Not required"
-    : "Not configured";
-  $("techniciansAvailable").textContent=configured&&technician.technicians_available!=null
-    ? String(technician.technicians_available) : "Not configured";
-  $("techStatus").textContent=(technician.status||"not configured").toUpperCase();
-  $("techSource").textContent=`Source: ${technician.source||"Not configured"}`;
-}
-
-async function loadMaintenanceIntelligence(){
-  const params=new URLSearchParams({
-    part_number:$('part').value.trim(),
-    part_description:$('desc').value.trim(),
-    available_technicians:$('techs').value||"3"
-  });
-  if($('techOverride').value) params.set('required_technicians_override',$('techOverride').value);
-  if($('installOverride').value) params.set('installation_minutes_override',$('installOverride').value);
-  try{
-    const response=await fetch(`/api/maintenance/intelligence?${params}`);
-    renderTechnician(await readJsonResponse(response));
-  }catch(error){
-    renderTechnician({configured:false,status:"not configured",source:"Not configured"});
-  }
-}
-
-function scheduleMaintenanceIntelligence(){
-  clearTimeout(maintenanceTimer);
-  maintenanceTimer=setTimeout(loadMaintenanceIntelligence,300);
-}
-
+let currentRunData=null;
 function supplierPayload(){
   return [1,2,3,4].map((i)=>({
     name:`Supplier ${String.fromCharCode(64+i)}`,
@@ -75,8 +20,8 @@ async function startRecovery(){
     part_description:$("desc").value.trim(), quantity:Number($("qty").value),
     max_hours:Number($("maxHours").value), downtime_cost_per_hour:Number($("downtime").value),
     compatibility_notes:$("compat").value, available_technicians:Number($("techs").value),
-    required_technicians_override:$("techOverride").value?Number($("techOverride").value):null,
-    installation_minutes_override:$("installOverride").value?Number($("installOverride").value):null,
+    required_technicians_override:Number($("techOverride").value||1),
+    installation_minutes_override:Number($("installOverride").value||0),
     suppliers:supplierPayload(), live_confirmed:live && $("liveConfirm").checked,
     idempotency_key:`${Date.now()}-${crypto.randomUUID()}`
   };
@@ -85,7 +30,7 @@ async function startRecovery(){
   try{
     const r=await fetch("/api/recovery/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     const data=await readJsonResponse(r);
-    runId=data.run_id; render(data);
+    runId=data.run_id; currentRunData=data; render(data); await refreshAI();
     $("replanPanel").classList.remove("hidden");
     $("replanMessage").innerHTML=data.agent_actions?.length
       ? `<b>Agent action:</b> ${esc(data.agent_actions[data.agent_actions.length-1])}`
@@ -101,7 +46,7 @@ async function replan(){
   try{
     const r=await fetch(`/api/recovery/${runId}/replan`,{method:"POST"});
     const data=await readJsonResponse(r);
-    render(data); $("planPanel").classList.remove("hidden");
+    currentRunData=data; render(data); $("planPanel").classList.remove("hidden"); await refreshAI();
     $("replanMessage").innerHTML=data.next_supplier_available
       ? "<b>One adaptive supplier call completed.</b> Replan again to continue discovery if a shortfall remains."
       : "<b>Replan complete.</b> All configured suppliers have been considered.";
@@ -114,7 +59,7 @@ async function approve(){
   try{
     const r=await fetch(`/api/recovery/${runId}/approve`,{method:"POST"});
     const data=await readJsonResponse(r);
-    render(data); $("stage").textContent="HUMAN APPROVED";
+    currentRunData=data; render(data); $("stage").textContent="HUMAN APPROVED"; await refreshAI();
   }catch(e){showError(e.message)}
 }
 
@@ -125,26 +70,14 @@ function render(data){
   const noConfirmedMessage=confirmedOffers.length?"":`<div class="bad"><b>No supplier confirmed availability.</b></div>`;
   $("offers").innerHTML=noConfirmedMessage+(data.offers||[]).map(o=>`
     <div class="offer">
-      <div><b>${esc(o.supplier)}</b><div class="meta">${esc(o.status)} · ${esc(o.delivery_method)} · ${safeText(o.availability_hours)}${o.availability_hours!=null?"h":""} · ${o.unit_price==null?"Not available":`${money(o.unit_price)}/unit`}</div><div class="meta">${o.call_id?`CALL-E ${esc(o.call_id)} · `:""}${esc(o.phone||"")}</div><div class="meta">${esc(o.notes)}</div></div>
+      <div><b>${esc(o.supplier)}</b><div class="meta">${esc(o.status)} · ${esc(o.delivery_method)} · ${safeText(o.availability_hours)}${o.availability_hours!=null?"h":""} · ${o.unit_price==null?"Not available":`${money(o.unit_price)}/unit`}</div><div class="meta">${o.call_id?`CALL-E ${esc(o.call_id)} · `:""}${esc(o.phone||"")}</div>
+      <div class="meta">Match: ${esc(o.product_match||"unknown")} · Tax: ${esc(o.tax_included||"unknown")} · Shipping: ${o.shipping_cost==null?"unknown":money(o.shipping_cost)}</div>
+      <div class="meta">${o.stock_location?`Stock: ${esc(o.stock_location)} · `:""}${o.payment_terms?`Terms: ${esc(o.payment_terms)} · `:""}${o.additional_charges?`Extra: ${esc(o.additional_charges)}`:""}</div>
+      <div class="meta">${esc(o.notes)}</div></div>
       <div class="stock">${safeText(o.quantity_available)}${o.quantity_available!=null?" units":""}</div>
     </div>`).join("");
   if(data.agent_actions?.length) $("replanMessage").innerHTML=`<b>Agent action:</b> ${esc(data.agent_actions[data.agent_actions.length-1])}`;
 
-  if(data.maintenance){
-    const technician=data.technician_intelligence||data.maintenance.technician_intelligence||{
-      required:null,
-      installation_required:data.maintenance.installation_required,
-      installation_minutes:data.maintenance.installation_minutes,
-      technicians_available:data.maintenance.technicians_available??data.request?.available_technicians,
-      status:null
-    };
-    renderTechnician(technician.required_technician===undefined?{
-      configured:Boolean(technician.required), required_technician:technician.required,
-      required_technicians:technician.required_count, installation_required:technician.installation_required,
-      installation_minutes:technician.installation_minutes, technicians_available:technician.technicians_available,
-      status:technician.status, source:technician.source
-    }:technician);
-  }
   const p=data.recommended_plan;
   if(p){
     const planReasons=p.infeasibility_reasons?.length
@@ -167,12 +100,42 @@ function render(data){
     $("approval").textContent=data.approved?"✓ Recovery plan approved by human operator. No automated purchase was executed.":"No purchase initiated — approval is required.";
   }
 }
+async function refreshAI(){
+  if(!runId)return;
+  $("aiPanel").classList.remove("hidden"); $("aiStatus").textContent="ANALYZING";
+  $("aiDecision").innerHTML='<div class="ai-loading">Gemini and Groq are evaluating confirmed supplier offers…</div>';
+  try{
+    const r=await fetch(`/api/ai/recommend/${encodeURIComponent(runId)}`,{method:"POST"});
+    const d=await readJsonResponse(r);
+    $("aiStatus").textContent=d.fallback_used?"RULE-BASED FALLBACK":"AI EVALUATED";
+    if(!d.success){$("aiDecision").innerHTML=`<div class="bad">${esc(d.decision||"No confirmed supplier offer yet.")}</div>`;return;}
+    const providers=[d.providers?.gemini?.used?"Gemini ✓":d.providers?.gemini?.configured?"Gemini unavailable":"Gemini not configured",
+      d.providers?.groq?.used?"Groq ✓":d.providers?.groq?.configured?"Groq unavailable":"Groq not configured"].join(" · ");
+    $("aiDecision").innerHTML=`<div class="ai-best"><small>BEST CONFIRMED OPTION</small><b>${esc(d.best_supplier||"No supplier")}</b><p>${esc(d.decision||"")}</p></div>
+      <div class="ai-provider">${esc(providers)}</div>
+      <div class="ai-ranking">${(d.ranking||[]).map((x,i)=>`<div class="ai-rank"><span><b>#${i+1} ${esc(x.supplier)}</b><small>${esc(x.reason||"")}</small></span><strong>${esc(x.score)}</strong></div>`).join("")}</div>
+      <div class="ai-risk"><b>Risk:</b> ${esc(d.risk||"None returned")}</div>`;
+  }catch(e){$("aiStatus").textContent="ERROR";$("aiDecision").innerHTML=`<div class="bad">${esc(e.message)}</div>`;}
+}
+function addChat(role,text){
+  const d=document.createElement("div"); d.className=`chat-msg ${role}`; d.textContent=text;
+  $("chatMessages").appendChild(d); $("chatMessages").scrollTop=$("chatMessages").scrollHeight; return d;
+}
+async function sendChat(){
+  const input=$("chatInput"), msg=input.value.trim(); if(!msg)return;
+  addChat("user",msg); input.value=""; const reply=addChat("assistant","Thinking…");
+  try{
+    const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:msg,run_id:runId})});
+    const d=await readJsonResponse(r); reply.textContent=`${d.provider||"AI"}: ${d.answer||"No answer returned."}`;
+  }catch(e){reply.textContent=`Assistant error: ${e.message}`;}
+}
+document.addEventListener("DOMContentLoaded",()=>{const i=$("chatInput");if(i)i.addEventListener("keydown",e=>{if(e.key==="Enter")sendChat();});});
+
 async function loadConfig(){
   try{
     const r=await fetch("/api/config"); const c=await readJsonResponse(r);
     $("mode").value=c.mode;
     updateModeUI();
-    loadMaintenanceIntelligence();
   }catch{}
 }
 function updateModeUI(){

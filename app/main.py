@@ -7,9 +7,10 @@ from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import RequestValidationError
 from dotenv import load_dotenv
 
-from .models import RecoveryRequest, TestCallRequest, Supplier
+from .models import RecoveryRequest, TestCallRequest, Supplier, ChatRequest
 from .recovery_engine import RecoveryEngine
 from .call_e_service import CalleService, CallEError
+from .ai_service import AIService
 
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,6 +19,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 calle_service = CalleService()
 engine = RecoveryEngine(calle_service)
+ai_service = AIService()
 
 
 @app.exception_handler(RequestValidationError)
@@ -105,6 +107,49 @@ def recovery_calls(run_id: str):
     if not result:
         return JSONResponse({"error": "Recovery run not found."}, status_code=404)
     return JSONResponse({"calls": result.get("calls", [])})
+
+
+@app.get("/api/recovery/{run_id}/report")
+def recovery_report(run_id: str):
+    result = engine.get(run_id)
+    if not result:
+        return JSONResponse({"error": "Recovery run not found."}, status_code=404)
+    report = {
+        "run_id": run_id,
+        "stage": result.get("stage"),
+        "incident": result.get("request"),
+        "maintenance": result.get("maintenance"),
+        "offers": result.get("offers", []),
+        "recommended_plan": result.get("recommended_plan"),
+        "calls": result.get("calls", []),
+        "call_failures": result.get("call_failures", []),
+        "agent_actions": result.get("agent_actions", []),
+        "approved": result.get("approved", False),
+    }
+    return JSONResponse({"success": True, "report": report})
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    return ai_service.status()
+
+
+@app.post("/api/ai/recommend/{run_id}")
+async def ai_recommend(run_id: str):
+    result = engine.get(run_id)
+    if not result:
+        return JSONResponse({"success": False, "error": "Recovery run not found."}, status_code=404)
+    return JSONResponse(await ai_service.rank_suppliers(result.get("request", {}), result.get("offers", []), result.get("recommended_plan")))
+
+
+@app.post("/api/chat")
+async def chat(payload: ChatRequest):
+    context = {}
+    if payload.run_id:
+        result = engine.get(payload.run_id)
+        if result:
+            context = {k: result.get(k) for k in ["request", "offers", "recommended_plan", "stage", "agent_actions"]}
+    return JSONResponse(await ai_service.chat(payload.message, context))
 
 
 @app.post("/api/calle/test-call")

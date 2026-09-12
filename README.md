@@ -211,3 +211,7 @@ The important moment is the transition from **8 units available** to **12-unit s
 The web UI now allows Supplier A–D phone numbers to be edited directly.
 Use valid E.164 numbers (for example, `+919876543210`) for LIVE CALL-E mode.
 Only enter numbers you are authorized to call. DEMO mode does not place calls.
+
+
+## AI supplier decision and assistant
+Gemini and Groq are optional server-side AI layers. CALL-E remains responsible for real supplier phone calls. AI ranking never bypasses the deterministic recovery constraints. The dashboard also provides an assistant using the current run context. Add `GEMINI_API_KEY` and/or `GROQ_API_KEY` to `.env`.

@@ -57,12 +57,22 @@ class CalleService:
     @staticmethod
     def _result_schema() -> dict[str, Any]:
         fields = {
-            "supplier_name": {"type": "string", "description": "Supplier/business name stated by the recipient. Return unknown if not stated."},
-            "available_quantity": {"type": "integer", "description": "Number of units the supplier explicitly states are currently available. Do not infer this value."},
-            "unit_price": {"type": "number", "description": "Unit price explicitly quoted by the supplier. Do not infer or calculate it."},
-            "currency": {"type": "string", "enum": ["INR", "USD", "EUR", "GBP", "OTHER", "UNKNOWN"], "description": "Currency explicitly stated for the quoted price."},
-            "delivery_hours": {"type": "number", "description": "Hours until delivery of the available quantity, based only on an explicitly stated or clearly established time."},
-            "can_fulfill": {"type": "string", "enum": ["yes", "partial", "no", "unknown"], "description": "Use unknown when the supplier does not provide enough evidence."},
+            "supplier_name": {"type": "string", "description": "Supplier/business name stated by recipient."},
+            "product_match": {"type": "string", "enum": ["exact", "equivalent", "mismatch", "unknown"], "description": "Exact part, confirmed equivalent, mismatch, or insufficient evidence."},
+            "available_quantity": {"type": "integer", "description": "Units explicitly confirmed available."},
+            "unit_price": {"type": "number", "description": "Explicit quoted unit price."},
+            "currency": {"type": "string", "enum": ["INR", "USD", "EUR", "GBP", "OTHER", "UNKNOWN"], "description": "Explicit currency."},
+            "total_price": {"type": "number", "description": "Explicit total quoted price if stated."},
+            "delivery_hours": {"type": "number", "description": "Earliest delivery time in hours."},
+            "delivery_method": {"type": "string", "description": "Delivery, pickup, courier, or explicitly stated method."},
+            "shipping_cost": {"type": "number", "description": "Explicit shipping/delivery charge if stated."},
+            "tax_included": {"type": "string", "enum": ["yes", "no", "unknown"], "description": "Whether quoted price explicitly includes tax."},
+            "can_fulfill": {"type": "string", "enum": ["yes", "partial", "no", "unknown"], "description": "Full, partial, no, or unknown."},
+            "stock_location": {"type": "string", "description": "Stock location only if explicitly stated."},
+            "payment_terms": {"type": "string", "description": "Payment terms only if explicitly stated."},
+            "quote_validity_hours": {"type": "number", "description": "Quote validity only if explicitly stated."},
+            "additional_charges": {"type": "string", "description": "Explicit extra fees/minimum-order conditions."},
+            "summary": {"type": "string", "description": "Short factual summary."},
         }
         return {"type": "object", "required": list(fields), "properties": fields, "additionalProperties": False}
 
@@ -302,8 +312,27 @@ class CalleService:
         delivery_hours = result.get("delivery_hours")
         currency = result.get("currency") or "UNKNOWN"
         fulfillment = result.get("can_fulfill", "unknown")
-        complete_offer = quantity is not None and unit_price is not None and delivery_hours is not None and currency != "UNKNOWN" and fulfillment in {"yes", "partial"}
-        normalized = {"supplier": result.get("supplier_name") or supplier.name, "phone": supplier.phone, "quantity_available": quantity, "unit_price": unit_price, "currency": currency, "availability_hours": delivery_hours, "compatible": complete_offer, "confirmed": complete_offer, "compatibility_confidence": result.get("confidence", 1) if complete_offer else 0, "delivery_method": "delivery", "status": "FULL STOCK" if complete_offer and fulfillment == "yes" else "PARTIAL STOCK" if complete_offer and fulfillment == "partial" else "INCOMPLETE OFFER", "source": "CALL-E LIVE CALL", "call_id": call_id, "notes": result.get("summary", "")}
+        product_match = result.get("product_match", "unknown")
+        complete_offer = (
+            quantity is not None and unit_price is not None and delivery_hours is not None
+            and currency != "UNKNOWN" and fulfillment in {"yes", "partial"}
+            and product_match in {"exact", "equivalent", "unknown"}
+        )
+        normalized = {
+            "supplier": result.get("supplier_name") or supplier.name, "phone": supplier.phone,
+            "quantity_available": quantity, "unit_price": unit_price, "currency": currency,
+            "availability_hours": delivery_hours,
+            "compatible": complete_offer, "confirmed": complete_offer,
+            "compatibility_confidence": result.get("confidence", 1) if complete_offer else 0,
+            "delivery_method": result.get("delivery_method") or "unknown",
+            "status": "FULL STOCK" if complete_offer and fulfillment == "yes" else "PARTIAL STOCK" if complete_offer else "INCOMPLETE OFFER",
+            "source": "CALL-E LIVE CALL", "call_id": call_id, "notes": result.get("summary", ""),
+            "product_match": product_match, "shipping_cost": result.get("shipping_cost"),
+            "tax_included": result.get("tax_included", "unknown"), "total_price": result.get("total_price"),
+            "stock_location": result.get("stock_location", ""), "payment_terms": result.get("payment_terms", ""),
+            "quote_validity_hours": result.get("quote_validity_hours"),
+            "additional_charges": result.get("additional_charges", ""),
+        }
         record.update({"result": result, "summary": result.get("summary"), "confidence": result.get("confidence")})
         return normalized
 
@@ -345,28 +374,50 @@ class CalleService:
     def _build_task(self, supplier, request, known_offers):
         prior = ""
         if known_offers:
-            prior = "\nInformation already discovered from other suppliers:\n" + "\n".join(f"- {x['supplier']}: {x.get('quantity_available', 0)} units, ₹{x.get('unit_price', 0)}/unit, {x.get('availability_hours', 999)}h" for x in known_offers)
-        remaining = max(0, request.quantity - sum(x.get("quantity_available", 0) for x in known_offers if x.get("compatible") and x.get("confirmed")))
-        return f"""You are RestartAI's supplier recovery agent calling {supplier.name} during a production disruption.
+            prior = "\nKnown confirmed offers from other suppliers:\n" + "\n".join(
+                f"- {x.get('supplier')}: {x.get('quantity_available', 'unknown')} units, "
+                f"{x.get('unit_price', 'unknown')} {x.get('currency', '')}/unit, "
+                f"{x.get('availability_hours', 'unknown')}h"
+                for x in known_offers
+            )
+        remaining = max(0, request.quantity - sum(
+            x.get("quantity_available", 0) for x in known_offers
+            if x.get("compatible") and x.get("confirmed")
+        ))
+        return f"""You are RestartAI's emergency industrial procurement agent calling {supplier.name}.
+The production line is down. Your job is to collect a factual supplier quote for human approval.
 
-    Your goal is to determine whether the supplier can provide the required part.
-    Part number: {request.part_number}
-    Part description: {request.part_description}
-    Required quantity: {request.quantity}
-    Production line: {request.machine}
-    Remaining quantity after known committed offers: {remaining}
-    {prior}
+INCIDENT
+Machine: {request.machine}
+Part number: {request.part_number}
+Part description: {request.part_description}
+Quantity required: {request.quantity}
+Remaining quantity needed: {remaining}
+Maximum recovery target: {request.max_hours} hours
+Compatibility notes: {request.compatibility_notes or "None"}
+{prior}
 
-    Ask the supplier to:
-    1. Confirm the supplier or business identity.
-    2. Confirm whether the requested part is currently available.
-    3. State exactly how many units are available.
-    4. State the unit price.
-    5. State the currency.
-    6. State the earliest delivery time in hours.
-    7. Confirm whether the complete requested quantity or only part can be fulfilled.
+Have a natural phone conversation. Never ask the supplier to speak JSON.
+Ask naturally:
+1. Confirm the supplier or business identity.
+2. Confirm whether the exact part number is in stock, or whether a specific equivalent is available.
+3. If equivalent, ask for brand/model and compatibility details.
+4. Ask how many units can be supplied immediately.
+5. Ask the unit price and currency.
+6. Ask the earliest delivery time and whether it is delivery, courier, or pickup.
+7. Ask whether GST/tax, shipping, packing and other charges are included; capture explicit extra charges.
+8. Ask where the stock is located.
+9. Ask about minimum order requirements and payment terms.
+10. Ask how long the quote is valid.
+11. Confirm full or partial fulfillment.
 
-    Do not invent or infer numerical values that the supplier did not state. Use unknown whenever evidence is insufficient. This is information gathering only; do not authorize a purchase.""".strip()
+RULES
+- Record only facts explicitly stated by the supplier.
+- Do not invent or infer numerical values. Never invent price, quantity, delivery time, tax, fees, location, or terms.
+- Missing information must remain unknown/null.
+- Do not authorize a purchase.
+- Treat an equivalent as different from an exact part match.
+- Give a concise factual summary at the end."""
 
     def _demo_call(self, supplier, request, known_offers):
         demo = {"Supplier A": dict(quantity_available=20, unit_price=150, availability_hours=24, delivery_method="delivery", compatible=True, compatibility_confidence=.98, confirmed=True, notes="Full stock, arrives tomorrow."), "Supplier B": dict(quantity_available=20, unit_price=220, availability_hours=2, delivery_method="delivery", compatible=True, compatibility_confidence=.98, confirmed=True, notes="Full stock, 2-hour delivery."), "Supplier C": dict(quantity_available=8, unit_price=180, availability_hours=.5, delivery_method="pickup", compatible=True, compatibility_confidence=.95, confirmed=True, notes="Only 8 available for immediate pickup."), "Supplier D": dict(quantity_available=12, unit_price=190, availability_hours=1.5, delivery_method="delivery", compatible=True, compatibility_confidence=.96, confirmed=True, notes="12 available; 90-minute delivery.")}

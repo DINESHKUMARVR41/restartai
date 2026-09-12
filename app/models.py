@@ -58,6 +58,19 @@ class Offer(BaseModel):
     source: str = "demo"
     call_id: Optional[str] = None
     notes: str = ""
+    product_match: str = "unknown"
+    shipping_cost: Optional[float] = Field(default=None, ge=0)
+    tax_included: str = "unknown"
+    total_price: Optional[float] = Field(default=None, ge=0)
+    stock_location: str = ""
+    payment_terms: str = ""
+    quote_validity_hours: Optional[float] = Field(default=None, ge=0)
+    additional_charges: str = ""
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    run_id: Optional[str] = None
 
 
 class PlanLeg(BaseModel):
