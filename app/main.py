@@ -122,3 +122,13 @@ async def test_call_status(call_id: str):
         return JSONResponse(await calle_service.get_call_status(call_id))
     except CallEError as exc:
         return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "details": {"call_id": call_id}}, status_code=502)
+
+
+@app.get("/api/calle/call/{call_id}/events")
+async def call_events(call_id: str):
+    if call_id not in calle_service.calls:
+        return JSONResponse({"success": False, "error": "CALL-E call not found."}, status_code=404)
+    try:
+        return JSONResponse({"success": True, "call_id": call_id, "events": await calle_service.get_call_events(call_id)})
+    except CallEError as exc:
+        return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "details": {"call_id": call_id}}, status_code=502)

@@ -116,10 +116,16 @@ class RecoveryEngine:
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
         technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
-        state = {"run_id": run_id, "request": request.model_dump(), "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}, "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0, "approved": False, "calls": []}
-        # Live mode starts with one supplier; replanning decides whether another is needed.
-        await self._call_and_store_async(state, request, 0)
-        state["next_supplier_index"] = 1
+        state = {"run_id": run_id, "request": request.model_dump(), "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}, "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0, "approved": False, "calls": [], "agent_actions": []}
+        # Live mode advances automatically after failed/insufficient offers.
+        while state["next_supplier_index"] < len(request.suppliers):
+            index = state["next_supplier_index"]
+            await self._call_and_store_async(state, request, index)
+            state["next_supplier_index"] += 1
+            if self._remaining_quantity(state["offers"], request.quantity) <= 0:
+                break
+        state["maintenance"] = {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}
+        state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
         RUNS[run_id] = state
         if key:
             IDEMPOTENCY[key] = run_id
@@ -148,6 +154,7 @@ class RecoveryEngine:
             notes = human_message or str(exc)
             offer = Offer(supplier=supplier.name, phone=supplier.phone, status="SUPPLIER UNAVAILABLE" if category == "supplier_unavailable" else "CALL FAILED", notes=notes, source="CALL-E LIVE CALL", call_id=call_id or record.get("call_id"))
             state.setdefault("call_failures", []).append({"supplier": supplier.name, "phone": supplier.phone, "call_id": call_id or record.get("call_id"), "category": category, "human_message": human_message, "failure_code": diagnostics.get("failure_code"), "failure_message": diagnostics.get("failure_message"), "attempt_failure_code": diagnostics.get("attempt_failure_code"), "attempt_failure_message": diagnostics.get("attempt_failure_message"), "recipient_status": diagnostics.get("recipient_status"), "attempt_status": diagnostics.get("attempt_status")})
+            state.setdefault("agent_actions", []).append(f"{supplier.name} could not be reached. Continuing with the next supplier.")
         state["offers"].append(offer.model_dump())
         state["calls"] = list(self.calle.calls.values())
 
@@ -224,10 +231,10 @@ class RecoveryEngine:
 
     @staticmethod
     def _remaining_quantity(offers, required):
-        return max(0, required - sum(o["quantity_available"] for o in offers if o["compatible"] and o["confirmed"]))
+        return max(0, required - sum(o["quantity_available"] or 0 for o in offers if o["compatible"] and o["confirmed"] and o["quantity_available"] is not None))
 
     def _generate_plans(self, request, offers, maintenance):
-        usable = [Offer(**o) for o in offers if o["compatible"] and o["confirmed"] and o["quantity_available"] > 0]
+        usable = [Offer(**o) for o in offers if o["compatible"] and o["confirmed"] and o["quantity_available"] is not None and o["unit_price"] is not None and o["availability_hours"] is not None and o["quantity_available"] > 0]
         plans = []
         # Exhaustive combinations are small for this MVP and allow true split planning.
         for r in range(1, len(usable) + 1):
@@ -289,5 +296,6 @@ class RecoveryEngine:
             "approved": state["approved"], "mode": self.calle.mode,
             "calls": state.get("calls", []),
             "call_failures": state.get("call_failures", []),
+            "agent_actions": state.get("agent_actions", []),
             "next_supplier_available": state["next_supplier_index"] < len(RecoveryRequest(**state["request"]).suppliers)
         }

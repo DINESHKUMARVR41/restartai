@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,6 +33,7 @@ class CalleService:
         self.api_key = os.getenv("CALLE_API_KEY", "")
         self.base_url = os.getenv("CALLE_BASE_URL", "https://api.heycall-e.com").rstrip("/")
         self.calls: dict[str, dict[str, Any]] = {}
+        self.max_retries = max(0, int(os.getenv("CALL_E_MAX_RETRIES", "1")))
 
     @staticmethod
     def validate_phone(phone: str) -> str:
@@ -55,12 +57,12 @@ class CalleService:
     @staticmethod
     def _result_schema() -> dict[str, Any]:
         fields = {
-            "supplier_name": {"type": "string", "description": "Supplier name or business name given during the call."},
-            "available_quantity": {"type": "integer", "description": "Number of units the supplier can provide."},
-            "unit_price": {"type": "number", "description": "Price per unit offered by the supplier."},
-            "currency": {"type": "string", "description": "Currency of the quoted unit price, such as INR."},
-            "delivery_hours": {"type": "number", "description": "Number of hours until delivery."},
-            "can_fulfill": {"type": "string", "enum": ["yes", "partial", "no", "unknown"]},
+            "supplier_name": {"type": "string", "description": "Supplier/business name stated by the recipient. Return unknown if not stated."},
+            "available_quantity": {"type": "integer", "description": "Number of units the supplier explicitly states are currently available. Do not infer this value."},
+            "unit_price": {"type": "number", "description": "Unit price explicitly quoted by the supplier. Do not infer or calculate it."},
+            "currency": {"type": "string", "enum": ["INR", "USD", "EUR", "GBP", "OTHER", "UNKNOWN"], "description": "Currency explicitly stated for the quoted price."},
+            "delivery_hours": {"type": "number", "description": "Hours until delivery of the available quantity, based only on an explicitly stated or clearly established time."},
+            "can_fulfill": {"type": "string", "enum": ["yes", "partial", "no", "unknown"], "description": "Use unknown when the supplier does not provide enough evidence."},
         }
         return {"type": "object", "required": list(fields), "properties": fields, "additionalProperties": False}
 
@@ -74,22 +76,35 @@ class CalleService:
         }
 
     @staticmethod
+    def _build_test_payload(supplier: Supplier) -> dict[str, Any]:
+        return {
+            "task": "You are testing RestartAI's supplier phone integration. Call the recipient, introduce yourself as an automated supplier verification agent, ask whether they can hear you, wait for their response, and politely end the call. Return whether the recipient answered.",
+            "recipients": [{"phones": [supplier.phone], "region": supplier.region, "locale": supplier.locale}],
+            "result_schema": {"type": "object", "required": ["answered"], "properties": {"answered": {"type": "string", "enum": ["yes", "no", "unknown"], "description": "Use yes only if the recipient clearly answers and responds; no if terminal without a response; unknown if evidence is insufficient."}}, "additionalProperties": False},
+            "recipient_result_schema": {"type": "object", "required": ["answered"], "properties": {"answered": {"type": "string", "enum": ["yes", "no", "unknown"]}}, "additionalProperties": False},
+            "metadata": {"app": "restartai", "purpose": "telephony_test", "supplier_name": supplier.name},
+        }
+
+    @staticmethod
     def _error_from_response(response: httpx.Response, action: str) -> CallEError:
         try:
             body = response.json()
         except ValueError:
             body = {}
+        provider_code = body.get("code") if isinstance(body, dict) else None
         detail = body.get("message") or body.get("error") or body.get("detail") or response.text[:300]
+        if response.status_code == 409 and provider_code == "idempotency_conflict":
+            return CallEError("CALL-E rejected this request because the idempotency key was already used for a different request. A new idempotency key will be generated for the next independent call.", code=provider_code, status_code=409)
         messages = {401: "CALL-E authentication failed. Check CALLE_API_KEY.", 403: "CALL-E authorization was denied.", 422: "CALL-E rejected the call request. Check recipient phone format and request schema.", 429: "CALL-E rate limit reached. Try again later."}
         return CallEError(messages.get(response.status_code, f"CALL-E {action} failed ({response.status_code}): {detail}"), code=str(response.status_code), status_code=response.status_code)
 
-    async def create_call(self, supplier: Supplier, request: RecoveryRequest, known_offers=None, *, idempotency_key: str | None = None) -> dict[str, Any]:
+    async def create_call(self, supplier: Supplier, request: RecoveryRequest, known_offers=None, *, idempotency_key: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         phone = self.validate_phone(supplier.phone)
         key = idempotency_key or f"restartai-{request.idempotency_key or request.part_number}-{supplier.name}"
         logger.info("CALL-E create request supplier=%s phone=%s", supplier.name, self.mask_phone(phone))
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(f"{self.base_url}/v1/calls", headers=self._headers(key), json=self._build_payload(supplier, request, known_offers or []))
+                response = await client.post(f"{self.base_url}/v1/calls", headers=self._headers(key), json=payload or self._build_payload(supplier, request, known_offers or []))
         except httpx.TimeoutException as exc:
             raise CallEError("CALL-E request timed out.", code="network_timeout") from exc
         except httpx.HTTPError as exc:
@@ -163,6 +178,10 @@ class CalleService:
             "transcript_available": bool(cls._first_nested(data, ("transcript",))),
         }
         cleaned = {key: value for key, value in diagnostics.items() if value not in (None, "", {})}
+        if "failure_code" in cleaned:
+            cleaned["raw_failure_code"] = cleaned["failure_code"]
+        if "failure_message" in cleaned:
+            cleaned["raw_failure_message"] = cleaned["failure_message"]
         attempt_code = str(cleaned.get("attempt_failure_code", "")).lower()
         attempt_message = str(cleaned.get("attempt_failure_message", "")).lower()
         failure_message = str(cleaned.get("failure_message", "")).lower()
@@ -176,6 +195,17 @@ class CalleService:
         if no_answer_evidence and cleaned.get("status") == "failed":
             cleaned["category"] = "supplier_unavailable"
             cleaned["human_message"] = "Supplier did not answer or was unavailable."
+            cleaned["retryable"] = True
+        elif cleaned.get("status") == "canceled":
+            cleaned["category"] = "canceled"
+            cleaned["human_message"] = "CALL-E canceled the call."
+            cleaned["retryable"] = False
+        elif cleaned.get("status") == "failed":
+            raw_code = str(cleaned.get("attempt_failure_code") or cleaned.get("failure_code") or "").lower()
+            category = "provider_failure" if raw_code.startswith("5") or "provider" in failure_message else "telephony_failure"
+            cleaned["category"] = category
+            cleaned["human_message"] = "The telephony provider could not complete the call."
+            cleaned["retryable"] = category == "telephony_failure"
         return cleaned
 
     @classmethod
@@ -192,6 +222,23 @@ class CalleService:
         if key.lower() == "transcript":
             return "[redacted; transcript available]"
         return value
+
+    async def get_call_events(self, call_id: str) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(f"{self.base_url}/v1/calls/{call_id}/events", headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise CallEError("CALL-E events request timed out.", code="network_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise CallEError(f"CALL-E connection failed: {exc}", code="connection_error") from exc
+        if response.is_error:
+            raise self._error_from_response(response, "events")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise CallEError("CALL-E returned a non-JSON events response.", code="invalid_response", status_code=response.status_code) from exc
+        events = data if isinstance(data, list) else data.get("events", []) if isinstance(data, dict) else []
+        return self._safe_response(events)
 
     def _log_result(self, call_id: str, data: dict[str, Any]) -> None:
         diagnostics = self._diagnostics(call_id, data)
@@ -235,21 +282,37 @@ class CalleService:
         completed = await self.wait_for_call(call_id)
         status = self._status(completed)
         record = self._update_record(call_id, completed)
+        retry_number = 0
+        while status == "failed" and record.get("diagnostics", {}).get("retryable") and retry_number < self.max_retries:
+            retry_number += 1
+            logger.info("CALL-E bounded retry supplier=%s retry=%s", supplier.name, retry_number)
+            created = await self.create_call(supplier, request, known_offers, idempotency_key=idempotency_key)
+            call_id = created.get("id") or created.get("call_id")
+            completed = await self.wait_for_call(call_id)
+            status = self._status(completed)
+            record = self._update_record(call_id, completed)
         if status != "completed":
             diagnostics = record.get("diagnostics", {})
             raise CallEError(record.get("failure_message") or f"CALL-E call {status}.", code=record.get("failure_code") or status, call_id=call_id, diagnostics=diagnostics)
         result = self._extract_result(completed)
         if not result:
-            raise CallEError("CALL-E completed without a usable structured supplier result.", code="missing_result")
-        normalized = {"supplier": result.get("supplier_name") or supplier.name, "phone": supplier.phone, "quantity_available": result.get("available_quantity", 0), "unit_price": result.get("unit_price", 0), "currency": result.get("currency", "INR"), "availability_hours": result.get("delivery_hours", 999), "compatible": result.get("can_fulfill") in {"yes", "partial"}, "confirmed": result.get("can_fulfill") in {"yes", "partial"}, "compatibility_confidence": result.get("confidence", 1), "delivery_method": "delivery", "status": "FULL STOCK" if result.get("can_fulfill") == "yes" else "PARTIAL STOCK" if result.get("can_fulfill") == "partial" else "NO STOCK", "source": "CALL-E LIVE CALL", "call_id": call_id, "notes": result.get("summary", "")}
+            raise CallEError("CALL-E completed without a usable structured supplier result.", code="missing_result", call_id=call_id)
+        quantity = result.get("available_quantity")
+        unit_price = result.get("unit_price")
+        delivery_hours = result.get("delivery_hours")
+        currency = result.get("currency") or "UNKNOWN"
+        fulfillment = result.get("can_fulfill", "unknown")
+        complete_offer = quantity is not None and unit_price is not None and delivery_hours is not None and currency != "UNKNOWN" and fulfillment in {"yes", "partial"}
+        normalized = {"supplier": result.get("supplier_name") or supplier.name, "phone": supplier.phone, "quantity_available": quantity, "unit_price": unit_price, "currency": currency, "availability_hours": delivery_hours, "compatible": complete_offer, "confirmed": complete_offer, "compatibility_confidence": result.get("confidence", 1) if complete_offer else 0, "delivery_method": "delivery", "status": "FULL STOCK" if complete_offer and fulfillment == "yes" else "PARTIAL STOCK" if complete_offer and fulfillment == "partial" else "INCOMPLETE OFFER", "source": "CALL-E LIVE CALL", "call_id": call_id, "notes": result.get("summary", "")}
         record.update({"result": result, "summary": result.get("summary"), "confidence": result.get("confidence")})
         return normalized
 
     async def start_test_call(self, phone: str, supplier_name: str) -> dict[str, Any]:
         phone = self.validate_phone(phone)
         supplier = Supplier(name=supplier_name, phone=phone)
-        request = RecoveryRequest(machine="test", part_number="test", part_description="test", quantity=1, max_hours=1, downtime_cost_per_hour=0, suppliers=[supplier], live_confirmed=True)
-        created = await self.create_call(supplier, request, idempotency_key=f"restartai-test-{phone}")
+        request = RecoveryRequest(machine="telephony test", part_number="telephony test", part_description="telephony test", quantity=1, max_hours=1, downtime_cost_per_hour=0, suppliers=[supplier], live_confirmed=True)
+        idempotency_key = f"restartai-test-{uuid.uuid4()}"
+        created = await self.create_call(supplier, request, idempotency_key=idempotency_key, payload=self._build_test_payload(supplier))
         call_id = created.get("id") or created.get("call_id")
         record = self.calls[call_id]
         return {"call_id": call_id, "status": record["status"], "supplier": supplier_name, "phone_masked": record["phone_masked"]}
@@ -284,17 +347,26 @@ class CalleService:
         if known_offers:
             prior = "\nInformation already discovered from other suppliers:\n" + "\n".join(f"- {x['supplier']}: {x.get('quantity_available', 0)} units, ₹{x.get('unit_price', 0)}/unit, {x.get('availability_hours', 999)}h" for x in known_offers)
         remaining = max(0, request.quantity - sum(x.get("quantity_available", 0) for x in known_offers if x.get("compatible") and x.get("confirmed")))
-        return f"""You are RestartAI, an emergency manufacturing recovery agent.
+        return f"""You are RestartAI's supplier recovery agent calling {supplier.name} during a production disruption.
 
-Call {supplier.name} and determine whether they can urgently supply the required replacement component.
-Component: {request.part_number} — {request.part_description}
-Required quantity: {request.quantity}
-Production line: {request.machine}
-Production downtime cost: ₹{request.downtime_cost_per_hour} per hour
-Remaining quantity after prior committed offers: {remaining}
+    Your goal is to determine whether the supplier can provide the required part.
+    Part number: {request.part_number}
+    Part description: {request.part_description}
+    Required quantity: {request.quantity}
+    Production line: {request.machine}
+    Remaining quantity after known committed offers: {remaining}
+    {prior}
 
-Ask the supplier for available quantity, unit price and currency, delivery time, and whether they can fulfill the full or partial quantity. Do not invent information. If a value is not provided, return unknown/0 according to the structured result schema.
-{prior}""".strip()
+    Ask the supplier to:
+    1. Confirm the supplier or business identity.
+    2. Confirm whether the requested part is currently available.
+    3. State exactly how many units are available.
+    4. State the unit price.
+    5. State the currency.
+    6. State the earliest delivery time in hours.
+    7. Confirm whether the complete requested quantity or only part can be fulfilled.
+
+    Do not invent or infer numerical values that the supplier did not state. Use unknown whenever evidence is insufficient. This is information gathering only; do not authorize a purchase.""".strip()
 
     def _demo_call(self, supplier, request, known_offers):
         demo = {"Supplier A": dict(quantity_available=20, unit_price=150, availability_hours=24, delivery_method="delivery", compatible=True, compatibility_confidence=.98, confirmed=True, notes="Full stock, arrives tomorrow."), "Supplier B": dict(quantity_available=20, unit_price=220, availability_hours=2, delivery_method="delivery", compatible=True, compatibility_confidence=.98, confirmed=True, notes="Full stock, 2-hour delivery."), "Supplier C": dict(quantity_available=8, unit_price=180, availability_hours=.5, delivery_method="pickup", compatible=True, compatibility_confidence=.95, confirmed=True, notes="Only 8 available for immediate pickup."), "Supplier D": dict(quantity_available=12, unit_price=190, availability_hours=1.5, delivery_method="delivery", compatible=True, compatibility_confidence=.96, confirmed=True, notes="12 available; 90-minute delivery.")}

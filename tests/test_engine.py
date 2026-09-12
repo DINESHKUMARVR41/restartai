@@ -188,9 +188,9 @@ def test_live_supplier_unavailable_is_not_confirmed_and_next_supplier_can_succee
     assert d["offers"][0]["status"] == "SUPPLIER UNAVAILABLE"
     assert d["offers"][0]["confirmed"] is False
     assert d["call_failures"][0]["attempt_failure_code"] == "480"
-    d = asyncio.run(engine.replan_async(d["run_id"]))
     assert d["offers"][1]["confirmed"] is True
     assert d["recommended_plan"]["legs"][0]["supplier"] == "Supplier B"
+    assert d["agent_actions"] == ["Supplier A could not be reached. Continuing with the next supplier."]
 
 
 def test_live_all_failed_has_no_recovery_plan():

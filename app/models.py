@@ -46,10 +46,10 @@ class TestCallRequest(BaseModel):
 class Offer(BaseModel):
     supplier: str
     phone: str
-    quantity_available: int = Field(ge=0, default=0)
-    unit_price: float = Field(ge=0, default=0)
+    quantity_available: Optional[int] = Field(default=None, ge=0)
+    unit_price: Optional[float] = Field(default=None, ge=0)
     currency: str = "INR"
-    availability_hours: float = Field(ge=0, default=999)
+    availability_hours: Optional[float] = Field(default=None, ge=0)
     delivery_method: str = "unknown"
     compatible: bool = False
     compatibility_confidence: float = Field(ge=0, le=1, default=0)

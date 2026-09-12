@@ -87,7 +87,9 @@ async function startRecovery(){
     const data=await readJsonResponse(r);
     runId=data.run_id; render(data);
     $("replanPanel").classList.remove("hidden");
-    $("replanMessage").innerHTML=data.next_supplier_available
+    $("replanMessage").innerHTML=data.agent_actions?.length
+      ? `<b>Agent action:</b> ${esc(data.agent_actions[data.agent_actions.length-1])}`
+      : data.next_supplier_available
       ? "<b>Initial wave complete.</b> The agent will call the next configured supplier only if a shortfall remains."
       : "<b>No additional supplier is configured.</b> Replanning will still calculate the best available plan.";
   }catch(e){showError(e.message)} finally{$("startBtn").disabled=false}
@@ -123,9 +125,10 @@ function render(data){
   const noConfirmedMessage=confirmedOffers.length?"":`<div class="bad"><b>No supplier confirmed availability.</b></div>`;
   $("offers").innerHTML=noConfirmedMessage+(data.offers||[]).map(o=>`
     <div class="offer">
-      <div><b>${esc(o.supplier)}</b><div class="meta">${esc(o.status)} · ${esc(o.delivery_method)} · ${o.availability_hours}h · ${money(o.unit_price)}/unit</div><div class="meta">${o.call_id?`CALL-E ${esc(o.call_id)} · `:""}${esc(o.phone||"")}</div><div class="meta">${esc(o.notes)}</div></div>
-      <div class="stock">${o.quantity_available} units</div>
+      <div><b>${esc(o.supplier)}</b><div class="meta">${esc(o.status)} · ${esc(o.delivery_method)} · ${safeText(o.availability_hours)}${o.availability_hours!=null?"h":""} · ${o.unit_price==null?"Not available":`${money(o.unit_price)}/unit`}</div><div class="meta">${o.call_id?`CALL-E ${esc(o.call_id)} · `:""}${esc(o.phone||"")}</div><div class="meta">${esc(o.notes)}</div></div>
+      <div class="stock">${safeText(o.quantity_available)}${o.quantity_available!=null?" units":""}</div>
     </div>`).join("");
+  if(data.agent_actions?.length) $("replanMessage").innerHTML=`<b>Agent action:</b> ${esc(data.agent_actions[data.agent_actions.length-1])}`;
 
   if(data.maintenance){
     const technician=data.technician_intelligence||data.maintenance.technician_intelligence||{
@@ -186,11 +189,12 @@ async function testLiveCall(){
   if(!$("liveConfirm").checked){showError("Check the LIVE authorization checkbox before placing a real phone call.");return}
   const phone=$("phone1").value.trim();
   if(!phone){showError("Enter Supplier A phone number first.");return}
+  if(!/^\+[1-9]\d{7,14}$/.test(phone)){showError("Enter a valid E.164 phone number, for example +919876543210.");return}
   const supplierName="Supplier A";
   const btn=$("testCallBtn");
   btn.disabled=true; btn.textContent="CALL REQUESTING...";
   $("callStatus").classList.remove("hidden");
-  $("callStatus").innerHTML=`<b>Sending live call request...</b><div class="meta">Supplier: ${esc(supplierName)}</div>`;
+  $("callStatus").innerHTML=`<b>Sending live call request...</b><div class="meta">Supplier: ${esc(supplierName)}</div><div class="meta">Phone: ${maskPhone(phone)}</div><div class="meta">Format: VALID E.164</div>`;
   try{
     const r=await fetch("/api/calle/test-call",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone,supplier_name:"Supplier A"})});
     const data=await readJsonResponse(r);
@@ -224,14 +228,18 @@ async function pollTestCall(callId,phone,supplierName){
         const failureMessage=data.failure_message||diagnostics.failure_message||data.error||data.message||"CALL-E reported that the call failed.";
         const reason=diagnostics.human_message;
         const category=diagnostics.category;
-        const friendly=category==="supplier_unavailable"?`<div class="bad"><b>Reason:</b> ${esc(reason)}</div><div><b>Telephony code:</b> ${esc(safeText(diagnostics.attempt_failure_code||failureCode))}</div><div><b>Original CALL-E message:</b> ${esc(failureMessage)}</div>`:"";
+        const friendly=category==="supplier_unavailable"?`<div class="bad"><b>Reason:</b> ${esc(reason)}</div><div><b>Telephony code:</b> ${esc(safeText(diagnostics.attempt_failure_code||failureCode))}</div><div><b>Original CALL-E message:</b> ${esc(failureMessage)}</div>`:`<div class="bad"><b>Failure category:</b> ${esc(safeText(category))}<br><b>Reason:</b> ${esc(safeText(reason))}</div>`;
         $("callStatus").innerHTML=html+friendly+diagnosticHtml(failureCode,failureMessage,diagnostics); return;
       }
       if(status==="canceled"){$("callStatus").innerHTML=html+`<div class="bad">The CALL-E call was canceled.</div>`;return}
       if(status==="completed"){
         const result=data.structured_result||data.result||data.recipient_result||null;
         html+=`<div class="good"><b>CALL COMPLETED</b></div>`;
-        if(result) html+=`<div class="call-result"><b>Supplier response</b><div>Available quantity: ${esc(safeText(result.available_quantity))}</div><div>Unit price: ${esc(safeText(result.unit_price))} ${esc(safeText(result.currency))}</div><div>Delivery: ${esc(safeText(result.delivery_hours))} hours</div><div>Fulfillment: ${esc(safeText(result.can_fulfill))}</div></div>`;
+        if(result?.answered) html+=`<div class="call-result"><b>Telephony test response</b><div>Recipient answered: ${esc(safeText(result.answered))}</div></div>`;
+        else if(result) {
+          const complete=result.available_quantity!=null&&result.unit_price!=null&&result.delivery_hours!=null&&result.currency&&result.can_fulfill&&result.can_fulfill!=="unknown";
+          html+=`<div class="call-result"><b>${complete?"Supplier response":"INCOMPLETE OFFER"}</b><div>Available quantity: ${esc(safeText(result.available_quantity))}</div><div>Unit price: ${esc(safeText(result.unit_price))} ${esc(safeText(result.currency))}</div><div>Delivery: ${esc(safeText(result.delivery_hours))} hours</div><div>Fulfillment: ${esc(safeText(result.can_fulfill))}</div></div>`;
+        } else html+=`<div class="bad"><b>Structured result:</b> Not available</div>`;
         $("callStatus").innerHTML=html; return;
       }
       $("callStatus").innerHTML=html;
