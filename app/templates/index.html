@@ -23,8 +23,9 @@
 <label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
 <label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
 <label>Available technicians<input id="techs" type="number" value="3" min="0"></label>
-<label>Required technicians<input id="techOverride" type="number" value="1" min="0"></label>
-<label>Installation time (minutes)<input id="installOverride" type="number" value="30" min="0"></label>
+<label>Required technicians override<input id="techOverride" type="number" placeholder="Use maintenance knowledge base" min="0"></label>
+<label>Installation time override (minutes)<input id="installOverride" type="number" placeholder="Use maintenance knowledge base" min="0"></label>
+<div id="maintenanceInsight" class="replan-box hidden"></div>
 </div>
 <label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
 <button id="startBtn" onclick="startRecovery()">START RECOVERY</button></div>

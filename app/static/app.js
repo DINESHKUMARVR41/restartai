@@ -1,3 +1,47 @@
+
+const $=(id)=>document.getElementById(id);
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function safeText(v){return v==null||v===""?"—":String(v);}
+function money(v){return v==null||v===""?"—":`₹${Number(v).toLocaleString("en-IN",{maximumFractionDigits:2})}`;}
+function clearError(){const e=$("error");if(e){e.textContent="";e.classList.add("hidden");}}
+function showError(msg){const e=$("error");if(e){e.textContent=msg||"Something went wrong.";e.classList.remove("hidden");}else{console.error(msg);}}
+async function readJsonResponse(r){
+  let d={}; try{d=await r.json();}catch{throw new Error(`Server returned HTTP ${r.status}.`);}
+  if(!r.ok) throw new Error(d.error||d.detail||`Request failed (HTTP ${r.status}).`);
+  return d;
+}
+let maintenanceTimer=null;
+function scheduleMaintenanceIntelligence(){
+  clearTimeout(maintenanceTimer); maintenanceTimer=setTimeout(loadMaintenanceIntelligence,250);
+}
+async function loadMaintenanceIntelligence(){
+  const pn=$("part")?.value.trim()||"", pd=$("desc")?.value.trim()||"";
+  if(!pn||!pd)return;
+  try{
+    const qs=new URLSearchParams({part_number:pn,part_description:pd,available_technicians:String(Number($("techs")?.value||0))});
+    const tro=$("techOverride")?.value.trim(), io=$("installOverride")?.value.trim();
+    if(tro)qs.set("required_technicians_override",tro);
+    if(io)qs.set("installation_minutes_override",io);
+    const r=await fetch(`/api/maintenance/intelligence?${qs}`);
+    const d=await readJsonResponse(r), box=$("maintenanceInsight");
+    if(box){
+      box.classList.remove("hidden");
+      box.innerHTML=`<b>Maintenance intelligence</b><div class="meta">${esc(d.configured?`Matched task: ${d.task}`:"No matching maintenance task configured")}</div>
+      <div class="meta">Technicians: ${safeText(d.required_technicians)} required / ${safeText(d.technicians_available)} available · Installation: ${safeText(d.installation_minutes)} min · Status: ${esc(d.status||"unknown")}</div>`;
+    }
+  }catch(e){console.warn("Maintenance intelligence:",e.message);}
+}
+async function getAIRecommendation(){await refreshAI();}
+async function downloadReport(){
+  if(!runId){showError("Start a recovery run before downloading a report.");return;}
+  try{
+    const r=await fetch(`/api/recovery/${encodeURIComponent(runId)}/report`), d=await readJsonResponse(r);
+    const blob=new Blob([JSON.stringify(d.report||d,null,2)],{type:"application/json"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`restartai-recovery-${runId}.json`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  }catch(e){showError(e.message);}
+}
+
 let runId=null;
 let currentRunData=null;
 function supplierPayload(){
@@ -5,7 +49,7 @@ function supplierPayload(){
     name:`Supplier ${String.fromCharCode(64+i)}`,
     phone: $(`phone${i}`).value.trim(),
     region:"IN", locale:"en-IN"
-  }));
+  })).filter(s=>s.phone);
 }
 
 async function startRecovery(){
@@ -15,14 +59,22 @@ async function startRecovery(){
     showError("LIVE mode requires explicit confirmation that real phone calls will be placed.");
     return;
   }
+  const suppliers=supplierPayload();
+  if(live && !suppliers.length){showError("Enter at least one authorized supplier phone number.");return;}
+  if(live){
+    const bad=suppliers.find(s=>!/^\+[1-9]\d{7,14}$/.test(s.phone));
+    if(bad){showError(`${bad.name} must use E.164 format, for example +919876543210.`);return;}
+  }
+  const techOverride=$("techOverride").value.trim();
+  const installOverride=$("installOverride").value.trim();
   const payload={
     machine:$("machine").value.trim(), part_number:$("part").value.trim(),
     part_description:$("desc").value.trim(), quantity:Number($("qty").value),
     max_hours:Number($("maxHours").value), downtime_cost_per_hour:Number($("downtime").value),
     compatibility_notes:$("compat").value, available_technicians:Number($("techs").value),
-    required_technicians_override:Number($("techOverride").value||1),
-    installation_minutes_override:Number($("installOverride").value||0),
-    suppliers:supplierPayload(), live_confirmed:live && $("liveConfirm").checked,
+    required_technicians_override:techOverride?Number(techOverride):null,
+    installation_minutes_override:installOverride?Number(installOverride):null,
+    suppliers:suppliers, live_confirmed:live && $("liveConfirm").checked,
     idempotency_key:`${Date.now()}-${crypto.randomUUID()}`
   };
   $("stage").textContent="CALLING";
@@ -215,6 +267,7 @@ function diagnosticHtml(failureCode,failureMessage,diagnostics){
   return `<div class="bad"><b>Failure code:</b> ${esc(safeText(failureCode))}<br><b>Failure message:</b> ${esc(safeText(failureMessage))}</div><details class="technical-details"><summary>Technical details</summary><div>Recipient status: ${esc(safeText(diagnostics.recipient_status))}</div><div>Attempt status: ${esc(safeText(diagnostics.attempt_status))}</div><div>Attempt failure code: ${esc(safeText(diagnostics.attempt_failure_code))}</div><div>Attempt failure message: ${esc(safeText(diagnostics.attempt_failure_message))}</div><div>Structured result: ${diagnostics.structured_result&&Object.keys(diagnostics.structured_result).length?"Available":"Not available"}</div><div>Transcript: ${diagnostics.transcript_available?"Available":"Not available"}</div></details>`;
 }
 loadConfig();
+scheduleMaintenanceIntelligence();
 ["part","desc","techs","techOverride","installOverride"].forEach(id=>{
   $(id).addEventListener("input",scheduleMaintenanceIntelligence);
   $(id).addEventListener("change",scheduleMaintenanceIntelligence);

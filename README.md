@@ -215,3 +215,7 @@ Only enter numbers you are authorized to call. DEMO mode does not place calls.
 
 ## AI supplier decision and assistant
 Gemini and Groq are optional server-side AI layers. CALL-E remains responsible for real supplier phone calls. AI ranking never bypasses the deterministic recovery constraints. The dashboard also provides an assistant using the current run context. Add `GEMINI_API_KEY` and/or `GROQ_API_KEY` to `.env`.
+
+
+## Frontend repair note
+This repaired build preserves the existing CALL-E test-call implementation and fixes the dashboard JavaScript contract: button handlers/helpers are defined, report download works, maintenance intelligence updates from incident inputs, blank supplier numbers are excluded from LIVE payloads, and technician overrides are optional so the maintenance knowledge base can supply defaults.
