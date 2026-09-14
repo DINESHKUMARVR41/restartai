@@ -9,18 +9,20 @@ from typing import Any
 import httpx
 
 from .models import RecoveryRequest, Supplier
+from .config import Settings, load_settings
 
 E164_RE = re.compile(r"^\+[1-9]\d{7,14}$")
 logger = logging.getLogger(__name__)
 
 
 class CallEError(RuntimeError):
-    def __init__(self, message: str, *, code: str | None = None, status_code: int | None = None, call_id: str | None = None, diagnostics: dict[str, Any] | None = None):
+    def __init__(self, message: str, *, code: str | None = None, status_code: int | None = None, call_id: str | None = None, diagnostics: dict[str, Any] | None = None, request_id: str | None = None):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
         self.call_id = call_id
         self.diagnostics = diagnostics or {}
+        self.request_id = request_id
 
 
 class CallETimeoutError(CallEError):
@@ -28,11 +30,26 @@ class CallETimeoutError(CallEError):
 
 
 class CalleService:
-    def __init__(self):
-        self.mode = os.getenv("CALL_E_MODE", "demo").lower()
-        self.api_key = os.getenv("CALLE_API_KEY", "")
-        self.base_url = os.getenv("CALLE_BASE_URL", "https://api.heycall-e.com").rstrip("/")
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or load_settings()
+        self.mode = self.settings.call_e_mode
+        self.api_key = self.settings.calle_api_key
+        self.base_url = self.settings.calle_base_url
         self.calls: dict[str, dict[str, Any]] = {}
+
+    @property
+    def configured(self) -> bool:
+        return self.settings.configured
+
+    @property
+    def configuration_error(self) -> str | None:
+        return self.settings.configuration_error
+
+    def require_live_configuration(self) -> None:
+        if self.mode != "live":
+            raise CallEError("CALL-E live calls require CALL_E_MODE=live.", code="not_live", status_code=400)
+        if self.configuration_error:
+            raise CallEError(self.configuration_error, code="missing_api_key", status_code=503)
 
     @staticmethod
     def validate_phone(phone: str) -> str:
@@ -46,8 +63,7 @@ class CalleService:
         return f"{phone[:3]}******{phone[-4:]}" if len(phone) > 7 else "***"
 
     def _headers(self, idempotency_key: str | None = None) -> dict[str, str]:
-        if not self.api_key:
-            raise CallEError("CALL-E API key is missing. Add CALLE_API_KEY to .env.", code="missing_api_key")
+        self.require_live_configuration()
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
@@ -75,14 +91,40 @@ class CalleService:
         }
 
     @staticmethod
+    def _build_test_payload(phone: str, supplier_name: str) -> dict[str, Any]:
+        return {
+            "task": "This is a connectivity test for the RestartAI system. Please introduce yourself as the RestartAI test agent, confirm that you can hear the recipient clearly, state that this is only a test call, and politely end the call. Do not request product information or pricing.",
+            "recipients": [{"phones": [phone], "region": "IN", "locale": "en-IN"}],
+            "result_schema": {"type": "object", "required": ["test_call_completed"], "properties": {"test_call_completed": {"type": "boolean"}}, "additionalProperties": False},
+            "recipient_result_schema": {"type": "object", "required": ["heard_clearly"], "properties": {"heard_clearly": {"type": "string", "enum": ["yes", "no", "unknown"]}}, "additionalProperties": False},
+            "metadata": {"app": "restartai", "purpose": "connectivity_test", "supplier_name": supplier_name},
+        }
+
+    @staticmethod
     def _error_from_response(response: httpx.Response, action: str) -> CallEError:
         try:
             body = response.json()
         except ValueError:
             body = {}
-        detail = body.get("message") or body.get("error") or body.get("detail") or response.text[:300]
-        messages = {401: "CALL-E authentication failed. Check CALLE_API_KEY.", 403: "CALL-E authorization was denied.", 422: "CALL-E rejected the call request. Check recipient phone format and request schema.", 429: "CALL-E rate limit reached. Try again later."}
-        return CallEError(messages.get(response.status_code, f"CALL-E {action} failed ({response.status_code}): {detail}"), code=str(response.status_code), status_code=response.status_code)
+        body = body if isinstance(body, dict) else {}
+        provider_code = body.get("code") or body.get("error_code")
+        detail = body.get("message") or body.get("error") or body.get("detail") or response.text[:300] or "No error detail returned."
+        request_id = response.headers.get("x-request-id") or response.headers.get("request-id") or response.headers.get("x-correlation-id")
+        hints = {
+            400: "CALL-E rejected the request (HTTP 400).",
+            401: "CALL-E rejected the request (HTTP 401). Check CALLE_API_KEY.",
+            403: "CALL-E rejected the request (HTTP 403). Check account authorization.",
+            404: "CALL-E resource was not found (HTTP 404).",
+            409: "CALL-E rejected the request (HTTP 409). Check the idempotency key and request payload.",
+            422: "CALL-E rejected the request (HTTP 422). Check the E.164 phone number and request schema.",
+            429: "CALL-E rate limit reached (HTTP 429). Retrying status polling with backoff.",
+            500: "CALL-E server error (HTTP 500).",
+            502: "CALL-E gateway error (HTTP 502).",
+            503: "CALL-E is temporarily unavailable (HTTP 503).",
+            504: "CALL-E gateway timeout (HTTP 504).",
+        }
+        message = f"{hints.get(response.status_code, f'CALL-E {action} failed (HTTP {response.status_code}).')} {detail}"
+        return CallEError(message, code=str(provider_code or response.status_code), status_code=response.status_code, request_id=request_id, diagnostics={"provider_code": provider_code, "provider_message": detail, "request_id": request_id})
 
     async def create_call(self, supplier: Supplier, request: RecoveryRequest, known_offers=None, *, idempotency_key: str | None = None) -> dict[str, Any]:
         phone = self.validate_phone(supplier.phone)
@@ -126,7 +168,8 @@ class CalleService:
     @staticmethod
     def _status(data: dict[str, Any]) -> str:
         recipients = data.get("recipients") or [{}]
-        return str(data.get("status") or data.get("state") or recipients[0].get("status") or "unknown").lower()
+        raw = str(data.get("status") or data.get("state") or recipients[0].get("status") or "unknown").lower().replace("-", "_").replace(" ", "_")
+        return {"cancelled": "canceled", "no_answer": "failed"}.get(raw, raw)
 
     @staticmethod
     def _first_nested(data: Any, keys: tuple[str, ...]) -> Any:
@@ -213,10 +256,18 @@ class CalleService:
             self._log_result(call_id, data)
         return record
 
-    async def wait_for_call(self, call_id: str, *, max_wait_seconds: int = 300, poll_interval: float = 2.0) -> dict[str, Any]:
+    async def wait_for_call(self, call_id: str, *, max_wait_seconds: int | None = None, poll_interval: float | None = None) -> dict[str, Any]:
+        max_wait_seconds = max_wait_seconds or self.settings.poll_timeout_seconds
+        poll_interval = poll_interval or self.settings.poll_interval_seconds
         attempts = max(1, int(max_wait_seconds / poll_interval))
         for attempt in range(attempts):
-            data = await self.get_call(call_id)
+            try:
+                data = await self.get_call(call_id)
+            except CallEError as exc:
+                if exc.status_code == 429 and attempt < attempts - 1:
+                    await asyncio.sleep(min(30.0, poll_interval * (2 ** min(attempt, 4))))
+                    continue
+                raise
             record = self._update_record(call_id, data)
             if record["status"] in {"completed", "failed", "canceled"}:
                 return data
@@ -252,14 +303,38 @@ class CalleService:
 
     async def start_test_call(self, phone: str, supplier_name: str) -> dict[str, Any]:
         phone = self.validate_phone(phone)
-        supplier = Supplier(name=supplier_name, phone=phone)
-        request = RecoveryRequest(machine="test", part_number="test", part_description="test", quantity=1, max_hours=1, downtime_cost_per_hour=0, suppliers=[supplier], live_confirmed=True)
-        created = await self.create_call(supplier, request, idempotency_key=f"restartai-test-{phone}-{uuid.uuid4()}")
+        if self.mode == "demo":
+            call_id = f"demo-test-{uuid.uuid4().hex[:8]}"
+            self.calls[call_id] = {"call_id": call_id, "supplier": supplier_name, "phone": phone, "phone_masked": self.mask_phone(phone), "status": "queued", "purpose": "connectivity_test", "demo": True, "poll_count": 0}
+            return {"call_id": call_id, "status": "queued", "supplier": supplier_name, "phone_masked": self.mask_phone(phone), "demo": True}
+        self.require_live_configuration()
+        key = f"restartai-test-{uuid.uuid4()}"
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.base_url}/v1/calls", headers=self._headers(key), json=self._build_test_payload(phone, supplier_name))
+        except httpx.TimeoutException as exc:
+            raise CallEError("CALL-E connectivity-test request timed out.", code="network_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise CallEError(f"CALL-E connection failed: {exc}", code="connection_error") from exc
+        if response.is_error:
+            raise self._error_from_response(response, "connectivity test")
+        try:
+            created = response.json()
+        except ValueError as exc:
+            raise CallEError("CALL-E returned a non-JSON connectivity-test response.", code="invalid_response", status_code=response.status_code) from exc
         call_id = created.get("id") or created.get("call_id")
-        record = self.calls[call_id]
+        if not call_id:
+            raise CallEError("CALL-E returned no call ID for the connectivity test.", code="invalid_response")
+        record = {"call_id": call_id, "supplier": supplier_name, "phone": phone, "phone_masked": self.mask_phone(phone), "status": self._status(created), "purpose": "connectivity_test", "created_at": datetime.now(timezone.utc).isoformat()}
+        self.calls[call_id] = record
         return {"call_id": call_id, "status": record["status"], "supplier": supplier_name, "phone_masked": record["phone_masked"]}
 
     async def test_call_status(self, call_id: str) -> dict[str, Any]:
+        record = self.calls.get(call_id)
+        if record and record.get("demo"):
+            record["poll_count"] += 1
+            record["status"] = "in_progress" if record["poll_count"] == 1 else "completed"
+            return {"success": True, "call_id": call_id, "status": record["status"], "demo": True, "failure_code": None, "failure_message": None, "diagnostics": {"status": record["status"]}, "provider_response": {"demo": True}}
         data = await self.get_call(call_id)
         record = self._update_record(call_id, data)
         return {

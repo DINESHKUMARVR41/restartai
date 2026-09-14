@@ -124,13 +124,12 @@ class RecoveryEngine:
         # existing_offers=[] for every call since none have completed yet at dial time;
         # results are gathered and appended in supplier order (not completion order) so
         # the UI always lists Supplier A, B, C, D in the order they were configured.
-        results = await asyncio.gather(*(
-            self._call_and_store_async(state, request, i, existing_offers=[])
-            for i in range(len(request.suppliers))
-        ))
-        state["offers"].extend(results)
+        # Dispatch one supplier at a time. A later replan uses the first call's
+        # actual offer/failure before deciding whether another real call is useful.
+        if request.suppliers:
+            await self._call_and_store_async(state, request, 0)
+            state["next_supplier_index"] = 1
         state["calls"] = list(self.calle.calls.values())
-        state["next_supplier_index"] = len(request.suppliers)
         RUNS[run_id] = state
         if key:
             IDEMPOTENCY[key] = run_id

@@ -39,7 +39,7 @@ async def runtime_error(request: Request, exc: RuntimeError):
 
 @app.exception_handler(CallEError)
 async def calle_error(request: Request, exc: CallEError):
-    return JSONResponse({"success": False, "error": str(exc), "code": exc.code}, status_code=502)
+    return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "status": exc.status_code, "request_id": exc.request_id, "diagnostics": exc.diagnostics}, status_code=exc.status_code or 502)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -49,7 +49,12 @@ def index(request: Request):
 
 @app.get("/api/config")
 def config():
-    return {"mode": calle_service.mode, "live": calle_service.mode == "live"}
+    return {"mode": calle_service.mode, "live": calle_service.mode == "live", "configured": calle_service.configured, "configuration_error": calle_service.configuration_error}
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "mode": calle_service.mode, "calle_configured": calle_service.configured, "calle_configuration_error": calle_service.configuration_error, "llm_configured": llm_service.enabled}
 
 
 @app.get("/api/maintenance/intelligence")
@@ -72,6 +77,8 @@ def maintenance_intelligence(
 
 @app.post("/api/recovery/start")
 async def start_recovery(payload: RecoveryRequest):
+    if calle_service.mode == "live":
+        calle_service.require_live_configuration()
     result = await engine.start_async(payload) if calle_service.mode == "live" else engine.start(payload)
     return JSONResponse(result)
 
@@ -141,8 +148,8 @@ async def recovery_chat(run_id: str, payload: ChatRequest):
 
 @app.post("/api/calle/test-call")
 async def test_call(payload: TestCallRequest):
-    if calle_service.mode != "live":
-        return JSONResponse({"error": "CALL-E test calls require CALL_E_MODE=live."}, status_code=400)
+    if calle_service.mode == "live":
+        calle_service.require_live_configuration()
     return JSONResponse({"success": True, **(await calle_service.start_test_call(payload.phone, payload.supplier_name))})
 
 
