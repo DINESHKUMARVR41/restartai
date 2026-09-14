@@ -33,6 +33,16 @@ class RecoveryRequest(BaseModel):
     live_confirmed: bool = False
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    history: List[ChatMessage] = Field(default_factory=list)
+
+
 class TestCallRequest(BaseModel):
     phone: str
     supplier_name: str = "Test Supplier"
@@ -46,10 +56,10 @@ class TestCallRequest(BaseModel):
 class Offer(BaseModel):
     supplier: str
     phone: str
-    quantity_available: Optional[int] = Field(default=None, ge=0)
-    unit_price: Optional[float] = Field(default=None, ge=0)
+    quantity_available: int = Field(ge=0, default=0)
+    unit_price: float = Field(ge=0, default=0)
     currency: str = "INR"
-    availability_hours: Optional[float] = Field(default=None, ge=0)
+    availability_hours: float = Field(ge=0, default=999)
     delivery_method: str = "unknown"
     compatible: bool = False
     compatibility_confidence: float = Field(ge=0, le=1, default=0)
@@ -58,19 +68,6 @@ class Offer(BaseModel):
     source: str = "demo"
     call_id: Optional[str] = None
     notes: str = ""
-    product_match: str = "unknown"
-    shipping_cost: Optional[float] = Field(default=None, ge=0)
-    tax_included: str = "unknown"
-    total_price: Optional[float] = Field(default=None, ge=0)
-    stock_location: str = ""
-    payment_terms: str = ""
-    quote_validity_hours: Optional[float] = Field(default=None, ge=0)
-    additional_charges: str = ""
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
-    run_id: Optional[str] = None
 
 
 class PlanLeg(BaseModel):

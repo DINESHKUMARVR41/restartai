@@ -1,49 +1,144 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RestartAI — Emergency Production Recovery</title><link rel="stylesheet" href="/static/styles.css"></head>
+<title>RestartAI — Emergency Production Recovery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="/static/styles.css"></head>
 <body>
-<header><div class="brand">RESTART<span>AI</span></div><div id="modePill" class="pill">MODE: DEMO</div></header>
+
+<header>
+  <div class="brand">RESTART<span>AI</span></div>
+  <div class="header-right">
+    <div id="clock" class="clock">00:00:00</div>
+    <div id="modePill" class="pill">MODE · DEMO</div>
+  </div>
+</header>
+
 <main>
-<section class="hero"><div><p class="eyebrow">EMERGENCY PRODUCTION RECOVERY AGENT</p><h1>When the machine stops,<br><span>the agent starts calling.</span></h1><p class="sub">RestartAI turns fragmented supplier conversations into a dynamically replanned production-recovery plan.</p></div><div class="status-card"><div class="status-dot"></div><div><b>Human approval required</b><small>No automated purchase is executed</small></div></div></section>
+
+<section class="hero">
+  <p class="eyebrow">Emergency production recovery agent</p>
+  <h1>When the line stops,<br>the agent starts dialing.</h1>
+  <p class="sub">RestartAI turns fragmented supplier phone calls into a deterministic, dynamically replanned recovery plan — human approval required before any purchase.</p>
+</section>
 
 <div id="error" class="error hidden"></div>
+
+<section id="incidentHeader" class="incident-header hidden">
+  <div class="incident-field"><small>Machine</small><b id="incMachine">—</b></div>
+  <div class="incident-field"><small>Part</small><b id="incPart">—</b></div>
+  <div class="incident-field"><small>Quantity</small><b id="incQty">—</b></div>
+  <div class="incident-field"><small>Deadline</small><b id="incDeadline">—</b></div>
+  <div class="incident-field cost"><small>Downtime cost accrued</small><b id="incCost">₹0</b></div>
+</section>
+
 <section class="panel">
-<div class="panel-title"><h2>0. Call mode</h2><select id="mode" onchange="updateModeUI()"><option value="demo">DEMO</option><option value="live">LIVE CALL-E</option></select></div>
-<p class="hint">DEMO is deterministic and works offline. LIVE places real calls only to numbers you configure below.</p>
-<div id="liveBox" class="live-box hidden"><b>LIVE MODE</b><p>This action will initiate real phone calls to the configured authorized numbers. Use valid E.164 numbers and only numbers you are authorized to call.</p><label><input type="checkbox" id="liveConfirm"> I understand and explicitly authorize the live calls.</label></div>
+  <div class="row-head"><h2>00 · Call mode</h2>
+    <select id="mode" onchange="updateModeUI()"><option value="demo">DEMO</option><option value="live">LIVE CALL-E</option></select>
+  </div>
+  <p class="hint">DEMO is deterministic and works offline. LIVE places real calls only to numbers you configure below.</p>
+  <div id="liveBox" class="live-box hidden">
+    <b>LIVE MODE</b>
+    <p>This action will initiate real phone calls to the configured authorized numbers. Use valid E.164 numbers and only numbers you are authorized to call.</p>
+    <label class="checkline"><input type="checkbox" id="liveConfirm"> I understand and explicitly authorize the live calls.</label>
+  </div>
 </section>
 
 <section class="grid">
-<div class="panel"><h2>1. Production incident</h2>
-<div class="fields">
-<label>Machine<input id="machine" value="CNC Production Line 4"></label>
-<label>Part number<input id="part" value="SKF 6205-2RS"></label>
-<label>Description<input id="desc" value="Deep-groove ball bearing"></label>
-<label>Quantity<input id="qty" type="number" value="20"></label>
-<label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
-<label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
-<label>Available technicians<input id="techs" type="number" value="3" min="0"></label>
-<label>Required technicians override<input id="techOverride" type="number" placeholder="Use maintenance knowledge base" min="0"></label>
-<label>Installation time override (minutes)<input id="installOverride" type="number" placeholder="Use maintenance knowledge base" min="0"></label>
-<div id="maintenanceInsight" class="replan-box hidden"></div>
+
+  <div class="panel">
+    <h2>01 · Production incident</h2>
+    <div class="fields">
+      <label>Machine<input id="machine" value="CNC Production Line 4"></label>
+      <label>Part number<input id="part" value="SKF 6205-2RS" onchange="scheduleMaintenanceIntelligence()"></label>
+      <label>Description<input id="desc" value="Deep-groove ball bearing" onchange="scheduleMaintenanceIntelligence()"></label>
+      <label>Quantity<input id="qty" type="number" value="20"></label>
+      <label>Max recovery time (hours)<input id="maxHours" type="number" step=".5" value="3"></label>
+      <label>Downtime cost / hour (₹)<input id="downtime" type="number" value="5000"></label>
+      <label>Available technicians<input id="techs" type="number" value="3" min="0" onchange="scheduleMaintenanceIntelligence()">
+        <span id="techHint" class="field-hint">—</span>
+      </label>
+      <label>Required technicians override<input id="techOverride" type="number" min="0" placeholder="Auto" onchange="scheduleMaintenanceIntelligence()"></label>
+      <label>Installation override (min)<input id="installOverride" type="number" min="0" placeholder="Auto" onchange="scheduleMaintenanceIntelligence()"></label>
+    </div>
+    <label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
+    <button id="startBtn" onclick="startRecovery()">Start recovery</button>
+  </div>
+
+  <div class="panel">
+    <div class="row-head"><h2>02 · Supplier response feed</h2><span id="stage" class="stage-badge">WAITING</span></div>
+
+    <table class="offer-table">
+      <thead><tr><th>Supplier</th><th>Status</th><th>Match</th><th>Qty</th><th>Unit price</th><th>ETA</th><th>Method</th></tr></thead>
+      <tbody id="offerRows"><tr class="empty-row"><td colspan="7">Start a recovery run to see supplier calls.</td></tr></tbody>
+    </table>
+    <div id="offerNotes" class="offer-notes"></div>
+
+    <div class="supplier-inputs">
+      <div class="row-head"><b>Configured supplier phone numbers</b><span class="hint">LIVE uses these numbers; DEMO ignores them.</span></div>
+      <label>Supplier A<input class="phone" id="phone1" type="tel" placeholder="+919876543210"></label>
+      <label>Supplier B<input class="phone" id="phone2" type="tel" placeholder="+919876543210"></label>
+      <label>Supplier C<input class="phone" id="phone3" type="tel" placeholder="+919876543210"></label>
+      <label>Supplier D<input class="phone" id="phone4" type="tel" placeholder="+919876543210"></label>
+      <div class="live-test-panel"><button id="testCallBtn" class="secondary" onclick="testLiveCall()">Test live call</button><div id="callStatus" class="call-status hidden"></div></div>
+    </div>
+  </div>
+
+</section>
+
+<section id="replanPanel" class="panel hidden">
+  <div class="row-head">
+    <div><h2>03 · Adaptive replanning</h2><p class="hint">LIVE mode calls all configured suppliers simultaneously at start — replan just refreshes the plan as offers come in. DEMO mode calls the next supplier only if a shortfall remains.</p></div>
+    <button class="secondary" onclick="replan()">Replan / call next supplier</button>
+  </div>
+  <div id="replanMessage" class="replan-box"></div>
+</section>
+
+<section id="planPanel" class="panel hidden">
+  <div class="row-head"><h2>04 · Recovery plan</h2><span class="pill-recommended">Recommended</span></div>
+  <div id="plan"></div>
+
+  <div class="subhead">Other combinations considered</div>
+  <table class="alt-table"><tbody id="altPlans"></tbody></table>
+
+  <div class="ai-recommendation-panel">
+    <button id="aiRecBtn" class="secondary" onclick="getAiRecommendation()">Get AI recommendation</button>
+    <div id="aiRecommendation" class="ai-recommendation-box hidden"></div>
+  </div>
+
+  <div class="approval-row">
+    <div id="approval" class="approval">No purchase initiated — approval is required.</div>
+    <div class="approval-actions">
+      <button id="approveBtn" onclick="approve()">Approve recovery plan</button>
+      <button id="downloadBtn" class="secondary" onclick="downloadReport()">Download report</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Console log</h2>
+  <div id="activityList" class="console-log"><div class="log-empty">// awaiting incident input</div></div>
+</section>
+
+</main>
+
+<div id="chatWidget" class="chat-widget collapsed">
+  <button id="chatToggle" class="chat-toggle" onclick="toggleChat()">
+    <span class="chat-toggle-icon">💬</span><span class="chat-toggle-label">Ask about this run</span>
+  </button>
+  <div class="chat-panel">
+    <div class="chat-panel-head">
+      <b>Recovery run assistant</b>
+      <button class="chat-close" onclick="toggleChat()">×</button>
+    </div>
+    <div id="chatMessages" class="chat-messages">
+      <div class="chat-msg assistant">Ask me anything about this recovery run — suppliers, offers, the recommended plan, or costs.</div>
+    </div>
+    <form id="chatForm" class="chat-input-row" onsubmit="return submitChat(event)">
+      <input id="chatInput" type="text" placeholder="e.g. Why wasn't Supplier C picked?" autocomplete="off">
+      <button type="submit" id="chatSendBtn">Send</button>
+    </form>
+  </div>
 </div>
-<label>Compatibility notes<textarea id="compat">6205-2RS, 25mm bore, 52mm OD, 15mm width. Equivalent brands require confirmation.</textarea></label>
-<button id="startBtn" onclick="startRecovery()">START RECOVERY</button></div>
 
-<div class="panel"><div class="panel-title"><h2>2. Live supplier intelligence</h2><span id="stage">WAITING</span></div>
-<div id="offers" class="offers empty">Start a recovery run to see supplier calls.</div>
-<div class="supplier-inputs"><b>Configured supplier phone numbers</b><span class="hint">Enter the supplier numbers you are authorized to call. LIVE uses these numbers; DEMO ignores them.</span>
-<label>Supplier A phone<input class="phone" id="phone1" type="tel" placeholder="+919876543210"></label>
-<label>Supplier B phone<input class="phone" id="phone2" type="tel" placeholder="+919876543210"></label>
-<label>Supplier C phone<input class="phone" id="phone3" type="tel" placeholder="+919876543210"></label>
-<label>Supplier D phone<input class="phone" id="phone4" type="tel" placeholder="+919876543210"></label>
-<div class="live-test-panel"><button id="testCallBtn" class="secondary" onclick="testLiveCall()">TEST LIVE CALL</button><div id="callStatus" class="call-status hidden"></div></div></div>
-</div></section>
-
-<section id="replanPanel" class="panel hidden"><div class="panel-title"><div><h2>3. Agentic replanning</h2><p>RestartAI uses the discovered shortfall to decide whether another supplier call is useful.</p></div><button class="secondary" onclick="replan()">REPLAN / CALL NEXT SUPPLIER</button></div><div id="replanMessage" class="replan-box"></div></section>
-
-<section id="aiPanel" class="panel hidden"><div class="panel-title"><div><h2>5. AI supplier decision</h2><p>Gemini and Groq evaluate confirmed CALL-E offers. Hard recovery constraints remain deterministic.</p></div><span id="aiStatus" class="hint">WAITING</span></div><button class="secondary" onclick="getAIRecommendation()">GET AI RECOMMENDATION</button><div id="aiDecision" class="ai-decision"></div></section>
-<section id="chatPanel" class="panel"><div class="panel-title"><div><h2>6. RestartAI assistant</h2><p>Ask about the current incident, supplier calls, recovery plan, or next action.</p></div><span class="hint">Gemini / Groq</span></div><div id="chatMessages" class="chat-messages"><div class="chat-msg assistant">I can explain the current recovery run and supplier results. I will not invent missing supplier facts.</div></div><div class="chat-compose"><input id="chatInput" placeholder="Ask: Which supplier is best and why?"><button class="secondary" onclick="sendChat()">SEND</button></div></section>
-
-<section id="planPanel" class="panel hidden"><div class="panel-title"><h2>4. Recovery plan</h2><span class="recommended">RECOMMENDED</span></div><div id="plan"></div><div id="approval" class="approval">No purchase initiated — approval is required.</div><div class="plan-actions"><button id="approveBtn" onclick="approve()">APPROVE RECOVERY PLAN</button><button class="secondary" onclick="downloadReport()">DOWNLOAD RECOVERY REPORT</button></div></section>
-</main><script src="/static/app.js"></script></body></html>
+<script src="/static/app.js"></script>
+</body></html>

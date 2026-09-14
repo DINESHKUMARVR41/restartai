@@ -6,14 +6,17 @@ RestartAI is an AI-powered emergency production recovery agent for factories. In
 
 1. Factory enters the failed machine, part, quantity, recovery deadline and downtime cost.
 2. Supplier calls run in **DEMO** or **LIVE CALL-E** mode.
-3. Supplier conversations are converted into structured offers.
+3. Supplier conversations are converted into structured offers, including a compatibility-confidence score per offer.
 4. Partial stock creates a real shortfall and triggers adaptive supplier discovery.
 5. Multiple supplier legs can be combined.
 6. A local maintenance knowledge base determines demo technician requirements and installation time.
 7. Python deterministically calculates material arrival, installation, total recovery time and economic exposure.
-8. Recovery plans are compared and the best feasible plan is recommended.
+8. Recovery plans are compared and the best feasible plan is recommended. **Up to 3 alternative plans are shown alongside it** for transparency, so the human approver can see what was ruled out and why.
 9. Human approval is required before the workflow can mark a plan approved. No purchasing is automated.
 10. Demo mode is deterministic and requires no API key, internet, Gemini/Groq key, or real phone calls.
+11. **AI recommendation (optional, Claude-powered)** — explains the already-selected plan in plain English without ever recalculating cost, time, or feasibility itself. See "AI recommendation" section below.
+12. **Activity timeline** — every recovery/replan/recommendation/approval action is logged with a timestamp in the UI, giving a readable audit trail of the incident response.
+13. **Downloadable recovery report** — a one-click plain-text export of the incident, offers, recommended plan, alternatives considered, AI explanation, and approval status, suitable for attaching to an incident postmortem.
 
 ## Why CALL-E matters
 
@@ -163,6 +166,30 @@ DEMO simulates deterministic supplier responses. LIVE sends actual phone calls t
 
 Do not use the placeholder demo numbers in LIVE mode.
 
+## AI recommendation (optional, pluggable provider)
+
+After a recovery plan is generated, the **GET AI RECOMMENDATION** button on the plan panel asks an LLM to explain, in plain English, why the already-computed plan is the right call — it never recalculates cost, time, or feasibility itself; those stay 100% deterministic Python. If no API key is configured for the selected provider, it falls back to a short templated summary built from the same plan data, so the demo still works without any key.
+
+Three providers are supported, chosen with `LLM_PROVIDER`:
+
+```env
+LLM_PROVIDER=gemini   # gemini | anthropic | grok
+
+# Gemini (default) — genuinely free tier, no credit card, via Google AI Studio
+GEMINI_API_KEY=YOUR_LOCAL_SECRET
+GEMINI_MODEL=gemini-2.5-flash
+
+# Anthropic (Claude) — paid, needs billing set up on console.anthropic.com
+ANTHROPIC_API_KEY=YOUR_LOCAL_SECRET
+ANTHROPIC_MODEL=claude-sonnet-5
+
+# xAI (Grok) — free credit availability varies, check x.ai/api at signup time
+GROK_API_KEY=YOUR_LOCAL_SECRET
+GROK_MODEL=grok-4.1-fast
+```
+
+Only the key matching your chosen `LLM_PROVIDER` needs to be set. Like `CALLE_API_KEY`, never paste any of these keys into chat, frontend code, or version control — they stay server-side in `.env` only.
+
 ## Tests
 
 ```powershell
@@ -211,11 +238,3 @@ The important moment is the transition from **8 units available** to **12-unit s
 The web UI now allows Supplier A–D phone numbers to be edited directly.
 Use valid E.164 numbers (for example, `+919876543210`) for LIVE CALL-E mode.
 Only enter numbers you are authorized to call. DEMO mode does not place calls.
-
-
-## AI supplier decision and assistant
-Gemini and Groq are optional server-side AI layers. CALL-E remains responsible for real supplier phone calls. AI ranking never bypasses the deterministic recovery constraints. The dashboard also provides an assistant using the current run context. Add `GEMINI_API_KEY` and/or `GROQ_API_KEY` to `.env`.
-
-
-## Frontend repair note
-This repaired build preserves the existing CALL-E test-call implementation and fixes the dashboard JavaScript contract: button handlers/helpers are defined, report download works, maintenance intelligence updates from incident inputs, blank supplier numbers are excluded from LIVE payloads, and technician overrides are optional so the maintenance knowledge base can supply defaults.

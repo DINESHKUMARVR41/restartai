@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from .models import RecoveryRequest, TestCallRequest, Supplier, ChatRequest
 from .recovery_engine import RecoveryEngine
 from .call_e_service import CalleService, CallEError
-from .ai_service import AIService
+from .llm_service import LlmService, LlmError
 
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
@@ -19,7 +19,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 calle_service = CalleService()
 engine = RecoveryEngine(calle_service)
-ai_service = AIService()
+llm_service = LlmService()
 
 
 @app.exception_handler(RequestValidationError)
@@ -109,47 +109,34 @@ def recovery_calls(run_id: str):
     return JSONResponse({"calls": result.get("calls", [])})
 
 
-@app.get("/api/recovery/{run_id}/report")
-def recovery_report(run_id: str):
+@app.get("/api/config/llm")
+def llm_config():
+    return {"enabled": llm_service.enabled}
+
+
+@app.post("/api/recovery/{run_id}/recommendation")
+async def recovery_recommendation(run_id: str):
     result = engine.get(run_id)
     if not result:
         return JSONResponse({"error": "Recovery run not found."}, status_code=404)
-    report = {
-        "run_id": run_id,
-        "stage": result.get("stage"),
-        "incident": result.get("request"),
-        "maintenance": result.get("maintenance"),
-        "offers": result.get("offers", []),
-        "recommended_plan": result.get("recommended_plan"),
-        "calls": result.get("calls", []),
-        "call_failures": result.get("call_failures", []),
-        "agent_actions": result.get("agent_actions", []),
-        "approved": result.get("approved", False),
-    }
-    return JSONResponse({"success": True, "report": report})
+    if not result.get("plans"):
+        return JSONResponse({"success": False, "error": "No recovery plan is available yet."}, status_code=400)
+    try:
+        return JSONResponse(await llm_service.recommend(result))
+    except LlmError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
 
 
-@app.get("/api/ai/status")
-def ai_status():
-    return ai_service.status()
-
-
-@app.post("/api/ai/recommend/{run_id}")
-async def ai_recommend(run_id: str):
+@app.post("/api/recovery/{run_id}/chat")
+async def recovery_chat(run_id: str, payload: ChatRequest):
     result = engine.get(run_id)
     if not result:
-        return JSONResponse({"success": False, "error": "Recovery run not found."}, status_code=404)
-    return JSONResponse(await ai_service.rank_suppliers(result.get("request", {}), result.get("offers", []), result.get("recommended_plan")))
-
-
-@app.post("/api/chat")
-async def chat(payload: ChatRequest):
-    context = {}
-    if payload.run_id:
-        result = engine.get(payload.run_id)
-        if result:
-            context = {k: result.get(k) for k in ["request", "offers", "recommended_plan", "stage", "agent_actions"]}
-    return JSONResponse(await ai_service.chat(payload.message, context))
+        return JSONResponse({"error": "Recovery run not found."}, status_code=404)
+    try:
+        history = [m.model_dump() for m in payload.history]
+        return JSONResponse(await llm_service.chat(result, payload.message, history))
+    except LlmError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
 
 
 @app.post("/api/calle/test-call")
@@ -165,15 +152,5 @@ async def test_call_status(call_id: str):
         return JSONResponse({"success": False, "error": "CALL-E call not found."}, status_code=404)
     try:
         return JSONResponse(await calle_service.get_call_status(call_id))
-    except CallEError as exc:
-        return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "details": {"call_id": call_id}}, status_code=502)
-
-
-@app.get("/api/calle/call/{call_id}/events")
-async def call_events(call_id: str):
-    if call_id not in calle_service.calls:
-        return JSONResponse({"success": False, "error": "CALL-E call not found."}, status_code=404)
-    try:
-        return JSONResponse({"success": True, "call_id": call_id, "events": await calle_service.get_call_events(call_id)})
     except CallEError as exc:
         return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "details": {"call_id": call_id}}, status_code=502)
