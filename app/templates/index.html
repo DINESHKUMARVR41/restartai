@@ -72,10 +72,6 @@
       <tbody id="offerRows"><tr class="empty-row"><td colspan="7">Start a recovery run to see supplier calls.</td></tr></tbody>
     </table>
     <div id="offerNotes" class="offer-notes"></div>
-    <div class="call-timeline">
-      <div class="row-head"><b>LIVE call activity</b><span class="hint">Only suppliers actually called for this recovery appear here.</span></div>
-      <div id="callTimeline" class="call-timeline-list"><div class="empty-row">No recovery calls yet.</div></div>
-    </div>
 
     <div class="supplier-inputs">
       <div class="row-head"><b>Configured supplier phone numbers</b><span class="hint">LIVE uses these numbers; DEMO ignores them.</span></div>
@@ -83,7 +79,7 @@
       <label>Supplier B<input class="phone" id="phone2" type="tel" placeholder="+919876543210"></label>
       <label>Supplier C<input class="phone" id="phone3" type="tel" placeholder="+919876543210"></label>
       <label>Supplier D<input class="phone" id="phone4" type="tel" placeholder="+919876543210"></label>
-      <div class="live-test-panel"><button id="testCallBtn" class="secondary" onclick="testLiveCall()">Test live call</button><div id="callStatus" class="call-status hidden"></div></div>
+      <div class="live-test-panel"><div class="call-status">LIVE calls are initiated only by <b>Start recovery</b>.</div></div>
     </div>
   </div>
 
@@ -91,7 +87,7 @@
 
 <section id="replanPanel" class="panel hidden">
   <div class="row-head">
-    <div><h2>03 · Adaptive replanning</h2><p class="hint">LIVE mode calls suppliers sequentially. Supplier A is called first; additional suppliers are called automatically only when confirmed compatible stock is still below the required quantity.</p></div>
+    <div><h2>03 · Adaptive replanning</h2><p class="hint">LIVE mode calls suppliers sequentially and only calls the next supplier when a confirmed compatible shortage remains. DEMO mode follows the same shortage-driven logic.</p></div>
     <button class="secondary" onclick="replan()">Replan / call next supplier</button>
   </div>
   <div id="replanMessage" class="replan-box"></div>
@@ -144,5 +140,5 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20260915-real-recovery"></script>
 </body></html>

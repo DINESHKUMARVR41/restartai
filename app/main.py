@@ -12,11 +12,8 @@ from .recovery_engine import RecoveryEngine
 from .call_e_service import CalleService, CallEError
 from .llm_service import LlmService, LlmError
 
+load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent
-# Always load the project's local .env, regardless of the directory from which
-# uvicorn is launched. This prevents a valid CALL-E key from being silently missed.
-load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="RestartAI — Emergency Production Recovery Agent")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -40,9 +37,16 @@ async def runtime_error(request: Request, exc: RuntimeError):
     return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
 
 
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception):
+    import logging
+    logging.getLogger("restartai").exception("Unhandled API error path=%s", request.url.path)
+    return JSONResponse({"success": False, "error": "RestartAI encountered an unexpected server error.", "detail": str(exc)[:500]}, status_code=500)
+
+
 @app.exception_handler(CallEError)
 async def calle_error(request: Request, exc: CallEError):
-    return JSONResponse({"success": False, "error": str(exc), "code": exc.code, "status": exc.status_code, "request_id": exc.request_id, "diagnostics": exc.diagnostics}, status_code=exc.status_code or 502)
+    return JSONResponse({"success": False, "error": str(exc), "code": exc.code}, status_code=502)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -52,12 +56,7 @@ def index(request: Request):
 
 @app.get("/api/config")
 def config():
-    return {"mode": calle_service.mode, "live": calle_service.mode == "live", "configured": calle_service.configured, "configuration_error": calle_service.configuration_error}
-
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "mode": calle_service.mode, "calle_configured": calle_service.configured, "calle_configuration_error": calle_service.configuration_error, "llm_configured": llm_service.enabled}
+    return {"mode": calle_service.mode, "live": calle_service.mode == "live"}
 
 
 @app.get("/api/maintenance/intelligence")
@@ -80,8 +79,6 @@ def maintenance_intelligence(
 
 @app.post("/api/recovery/start")
 async def start_recovery(payload: RecoveryRequest):
-    if calle_service.mode == "live":
-        calle_service.require_live_configuration()
     result = await engine.start_async(payload) if calle_service.mode == "live" else engine.start(payload)
     return JSONResponse(result)
 
@@ -151,9 +148,9 @@ async def recovery_chat(run_id: str, payload: ChatRequest):
 
 @app.post("/api/calle/test-call")
 async def test_call(payload: TestCallRequest):
-    if calle_service.mode == "live":
-        calle_service.require_live_configuration()
-    return JSONResponse({"success": True, **(await calle_service.start_test_call(payload.phone, payload.supplier_name))})
+    # The generic connectivity call was the source of repeated "test" calls.
+    # Keep the endpoint for backwards compatibility, but never place a call here.
+    return JSONResponse({"success": False, "error": "Generic CALL-E test calls are disabled. Use /api/recovery/start for a real supplier recovery call."}, status_code=410)
 
 
 @app.get("/api/calle/call/{call_id}")

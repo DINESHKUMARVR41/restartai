@@ -171,15 +171,3 @@ button.secondary:hover:not(:disabled){border-color:var(--amber);color:var(--ambe
 @media(max-width:600px){
   .chat-panel{width:calc(100vw - 32px)}
 }
-
-.call-timeline{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
-.call-timeline-list{display:grid;gap:8px;margin-top:10px}
-.call-event{border:1px solid var(--line);background:var(--panel-raised);padding:12px 14px}
-.call-event-head{display:flex;justify-content:space-between;gap:12px;align-items:center}
-.call-event .call-id{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-faint);word-break:break-all}
-.call-event .call-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:7px;font-size:11.5px;color:var(--text-dim)}
-.call-event .call-summary{margin-top:9px;font-size:12px;color:var(--text)}
-.call-event .call-result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
-.call-event .call-result-grid div{border:1px solid var(--line-soft);padding:8px}
-.call-event small{display:block;color:var(--text-faint);font-size:9px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
-@media(max-width:760px){.call-event .call-result-grid{grid-template-columns:repeat(2,1fr)}}

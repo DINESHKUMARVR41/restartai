@@ -36,9 +36,9 @@ Live calls are side effects. RestartAI therefore:
 
 ## Adaptive calls
 
-LIVE recovery is sequential and shortage-driven. RestartAI calls Supplier A first and waits for the structured result. It automatically calls Supplier B only if confirmed compatible stock is still below the requested quantity, then continues to the next configured supplier only while a shortfall remains. It stops immediately when the required quantity is fully covered or no suppliers remain.
+The first wave calls up to three configured suppliers.
 
-Each later supplier receives the remaining quantity plus a factual summary of information already discovered. This avoids unnecessary real phone calls and CALL-E spend while keeping the workflow adaptive. The dashboard is built automatically from the completed calls and the deterministic recovery plan; manual **REPLAN / CALL NEXT SUPPLIER** is retained only as a fallback for an unresolved shortfall.
+When a committed quantity shortfall remains, each **REPLAN / CALL NEXT SUPPLIER** action contacts one additional configured supplier. The task sent to the later supplier contains the remaining quantity and the information already discovered, so the call is context-aware rather than a duplicate generic prompt.
 
 ## Structured extraction
 

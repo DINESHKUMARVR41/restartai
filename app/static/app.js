@@ -103,7 +103,7 @@ function supplierPayload(){
     name:`Supplier ${String.fromCharCode(64+i)}`,
     phone: $(`phone${i}`).value.trim(),
     region:"IN", locale:"en-IN"
-  }));
+  })).filter(s=>s.phone);
 }
 
 async function startRecovery(){
@@ -113,6 +113,8 @@ async function startRecovery(){
     showError("LIVE mode requires explicit confirmation that real phone calls will be placed.");
     return;
   }
+  const suppliers=supplierPayload();
+  if(!suppliers.length){showError("Enter at least one supplier phone number before starting recovery.");return;}
   const payload={
     machine:$("machine").value.trim(), part_number:$("part").value.trim(),
     part_description:$("desc").value.trim(), quantity:Number($("qty").value),
@@ -120,7 +122,7 @@ async function startRecovery(){
     compatibility_notes:$("compat").value, available_technicians:Number($("techs").value),
     required_technicians_override:$("techOverride").value?Number($("techOverride").value):null,
     installation_minutes_override:$("installOverride").value?Number($("installOverride").value):null,
-    suppliers:supplierPayload(), live_confirmed:live && $("liveConfirm").checked,
+    suppliers:suppliers, live_confirmed:live && $("liveConfirm").checked,
     idempotency_key:`${Date.now()}-${crypto.randomUUID()}`
   };
   $("stage").textContent="CALLING"; $("stage").classList.add("active");
@@ -141,15 +143,11 @@ async function startRecovery(){
     chatHistory=[];
     $("chatMessages").innerHTML="";
     appendChatMessage("assistant","Ask me anything about this recovery run — suppliers, offers, the recommended plan, or costs.");
-    (data.calls||[]).forEach(c=>logActivity(`live_call supplier="${c.supplier}" status=${c.status} call_id=${c.call_id}`));
-    logActivity(`recovery_complete suppliers_called=${(data.calls||[]).length} remaining=${data.remaining_quantity??"?"}`);
-    $("replanPanel").classList.toggle("hidden", !(data.remaining_quantity>0 && data.next_supplier_available));
-    if(data.remaining_quantity>0 && data.next_supplier_available){
-      $("replanMessage").innerHTML=`<b>Shortfall remains: ${esc(data.remaining_quantity)} units.</b> The automatic workflow stopped after the adaptive call cycle. Use this button only if you want to continue to the next configured supplier.`;
-    }else if(data.remaining_quantity>0){
-      $("replanMessage").innerHTML=`<b>Unresolved shortfall: ${esc(data.remaining_quantity)} units.</b> No additional configured suppliers remain.`;
-    }
-    $("planPanel").classList.remove("hidden");
+    logActivity(`wave_complete offers=${(data.offers||[]).length}`);
+    $("replanPanel").classList.remove("hidden");
+    $("replanMessage").innerHTML=data.next_supplier_available
+      ? "<b>Initial wave complete.</b> The agent will call the next configured supplier only if a shortfall remains."
+      : "<b>No additional supplier is configured.</b> Replanning will still calculate the best available plan.";
   }catch(e){showError(e.message)} finally{$("startBtn").disabled=false; $("stage").classList.remove("active")}
 }
 
@@ -161,11 +159,10 @@ async function replan(){
     const r=await fetch(`/api/recovery/${runId}/replan`,{method:"POST"});
     const data=await readJsonResponse(r);
     render(data); $("planPanel").classList.remove("hidden");
-    logActivity(`adaptive_call offers=${(data.offers||[]).length} remaining=${data.remaining_quantity??"?"}`);
-    $("replanPanel").classList.toggle("hidden", !(data.remaining_quantity>0 && data.next_supplier_available));
-    $("replanMessage").innerHTML=data.remaining_quantity>0
-      ? (data.next_supplier_available ? `<b>Shortfall remains: ${esc(data.remaining_quantity)} units.</b> One more supplier can be called.` : `<b>Unresolved shortfall: ${esc(data.remaining_quantity)} units.</b> No more configured suppliers remain.`)
-      : "<b>Quantity fully covered.</b> No further supplier calls are needed.";
+    logActivity(`replan offers=${(data.offers||[]).length}`);
+    $("replanMessage").innerHTML=data.next_supplier_available
+      ? "<b>One adaptive supplier call completed.</b> Replan again to continue discovery if a shortfall remains."
+      : "<b>Replan complete.</b> All configured suppliers have been considered.";
   }catch(e){showError(e.message)} finally{$("stage").classList.remove("active")}
 }
 
@@ -262,31 +259,6 @@ function renderAlternatives(plans){
     </tr>`).join("");
 }
 
-function renderCallTimeline(calls){
-  const el=$("callTimeline");
-  if(!el)return;
-  if(!calls.length){el.innerHTML='<div class="empty-row">No recovery calls yet.</div>';return}
-  el.innerHTML=calls.map(c=>{
-    const r=c.structured_result||{};
-    const hasResult=Object.keys(r).length>0;
-    const status=String(c.status||"unknown").toUpperCase();
-    const result=hasResult?`<div class="call-result-grid">
-      <div><small>Available</small><b>${esc(safeText(r.available_quantity))}</b></div>
-      <div><small>Unit price</small><b>${esc(safeText(r.unit_price))} ${esc(safeText(r.currency||"INR"))}</b></div>
-      <div><small>Delivery</small><b>${esc(safeText(r.delivery_hours))}h</b></div>
-      <div><small>Compatibility</small><b>${esc(safeText(r.compatible))}</b></div>
-    </div>`:"";
-    const summary=c.summary||r.summary||c.human_message||"";
-    return `<div class="call-event">
-      <div class="call-event-head"><b>${esc(c.supplier||"Supplier")}</b><span class="stage-badge">${esc(status)}</span></div>
-      <div class="call-meta"><span>${esc(c.phone_masked||"")}</span><span class="call-id">${esc(c.call_id||"")}</span><span>${c.transcript_available?"Transcript captured":"No transcript"}</span></div>
-      ${summary?`<div class="call-summary">${esc(summary)}</div>`:""}
-      ${result}
-      ${c.failure_message?`<div class="bad call-summary">${esc(c.failure_message)}</div>`:""}
-    </div>`;
-  }).join("");
-}
-
 function render(data){
   lastRunData=data;
   $("stage").textContent=(data.stage||"").toUpperCase();
@@ -313,8 +285,6 @@ function render(data){
     $("offerNotes").innerHTML=(!confirmedOffers.length?`<div class="note-line bad">No supplier has confirmed availability yet.</div>`:"")
       +offers.filter(o=>o.notes).map(o=>`<div class="note-line">${esc(o.supplier)}: ${esc(o.notes)}${o.call_id?` · CALL-E ${esc(o.call_id)}`:""}</div>`).join("");
   }
-
-  renderCallTimeline(data.calls||[]);
 
   if(data.maintenance){
     const technician=data.technician_intelligence||data.maintenance.technician_intelligence||{
@@ -369,32 +339,6 @@ function updateModeUI(){
   $("modePill").classList.toggle("live",live);
   $("liveBox").classList.toggle("hidden",!live);
   document.querySelectorAll(".phone").forEach(x=>x.disabled=false);
-}
-
-async function testLiveCall(){
-  clearError();
-  const mode=$("mode").value;
-  if(mode!=="live"){showError("Select LIVE CALL-E mode before testing a real phone call.");return}
-  if(!$("liveConfirm").checked){showError("Check the LIVE authorization checkbox before placing a real phone call.");return}
-  const phone=$("phone1").value.trim();
-  if(!phone){showError("Enter Supplier A phone number first.");return}
-  const supplierName="Supplier A";
-  const btn=$("testCallBtn");
-  btn.disabled=true; btn.textContent="CALL REQUESTING...";
-  $("callStatus").classList.remove("hidden");
-  $("callStatus").innerHTML=`<b>Sending live call request...</b><div class="meta">Supplier: ${esc(supplierName)}</div>`;
-  try{
-    const r=await fetch("/api/calle/test-call",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone,supplier_name:"Supplier A"})});
-    const data=await readJsonResponse(r);
-    const callId=data.call_id||data.id;
-    if(!callId) throw new Error("CALL-E request returned successfully but no call ID was returned.");
-    $("callStatus").innerHTML=`<b>CALL REQUEST SENT</b><div class="meta">Supplier: ${esc(supplierName)}</div><div class="meta">Phone: ${maskPhone(phone)}</div><div class="meta">CALL-E Call ID: ${esc(callId)}</div><div class="call-state">Status: ${esc(data.status||"queued").toUpperCase()}</div>`;
-    await pollTestCall(callId,phone,supplierName);
-  }catch(e){
-    showError(e.message||"Unable to create CALL-E test call.");
-    $("callStatus").classList.remove("hidden");
-    $("callStatus").innerHTML=`<b>CALL-E CALL FAILED</b><div class="bad">${esc(e.message||"Unknown error")}</div>`;
-  }finally{btn.disabled=false;btn.textContent="TEST LIVE CALL"}
 }
 
 function maskPhone(phone){
