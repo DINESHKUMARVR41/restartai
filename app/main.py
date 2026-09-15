@@ -12,8 +12,11 @@ from .recovery_engine import RecoveryEngine
 from .call_e_service import CalleService, CallEError
 from .llm_service import LlmService, LlmError
 
-load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+# Always load the project's local .env, regardless of the directory from which
+# uvicorn is launched. This prevents a valid CALL-E key from being silently missed.
+load_dotenv(PROJECT_ROOT / ".env")
 app = FastAPI(title="RestartAI — Emergency Production Recovery Agent")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))

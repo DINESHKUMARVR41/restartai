@@ -77,6 +77,7 @@ def test_live_mode_never_uses_demo():
 
 def test_failed_status_preserves_nested_diagnostics_without_secrets():
     service = CalleService()
+    service.mode = "live"
     service.api_key = "test-key"
     service.calls["call_failed"] = {"call_id": "call_failed", "phone": "+919876543210"}
     failed = response(200, {
@@ -119,3 +120,18 @@ def test_other_failed_code_is_not_classified_as_supplier_unavailable():
     service = CalleService()
     diagnostics = service._diagnostics("call_500", {"id": "call_500", "status": "failed", "failure_code": "call_failed", "failure_message": "provider error", "recipients": [{"attempts": [{"failure_code": "500", "failure_message": "Internal provider failure"}]}]})
     assert "category" not in diagnostics
+
+
+def test_safe_response_redacts_call_e_transcript_turns_and_masks_phones():
+    service = CalleService()
+    data = {
+        "id": "call_safe",
+        "status": "completed",
+        "recipients": [{
+            "phones": ["+919876543210"],
+            "attempts": [{"transcript_turns": [{"speaker": "user", "text": "private"}]}],
+        }],
+    }
+    safe = service._safe_response(data)
+    assert safe["recipients"][0]["phones"] == ["+91******3210"]
+    assert safe["recipients"][0]["attempts"][0]["transcript_turns"] == "[redacted; transcript available]"

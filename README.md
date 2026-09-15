@@ -6,8 +6,9 @@ RestartAI is an AI-powered emergency production recovery agent for factories. In
 
 1. Factory enters the failed machine, part, quantity, recovery deadline and downtime cost.
 2. Supplier calls run in **DEMO** or **LIVE CALL-E** mode.
-3. Supplier conversations are converted into structured offers, including a compatibility-confidence score per offer.
-4. Partial stock creates a real shortfall and triggers adaptive supplier discovery.
+3. In LIVE mode, the first configured supplier is called with the full machine/part requirement; the call asks for exact part compatibility, quantity, unit price, delivery time/method, and full vs partial fulfillment.
+4. Supplier conversations are converted into structured offers, including compatibility and confidence.
+5. Partial or unavailable stock creates a real shortfall and automatically triggers the next supplier call only when more stock is needed.
 5. Multiple supplier legs can be combined.
 6. A local maintenance knowledge base determines demo technician requirements and installation time.
 7. Python deterministically calculates material arrival, installation, total recovery time and economic exposure.
@@ -15,7 +16,8 @@ RestartAI is an AI-powered emergency production recovery agent for factories. In
 9. Human approval is required before the workflow can mark a plan approved. No purchasing is automated.
 10. Demo mode is deterministic and requires no API key, internet, Gemini/Groq key, or real phone calls.
 11. **AI recommendation (optional, Claude-powered)** — explains the already-selected plan in plain English without ever recalculating cost, time, or feasibility itself. See "AI recommendation" section below.
-12. **Activity timeline** — every recovery/replan/recommendation/approval action is logged with a timestamp in the UI, giving a readable audit trail of the incident response.
+12. **Live call dashboard** — every actual recovery call is shown with supplier, masked phone, CALL-E ID, status, transcript availability, summary and structured result. Connectivity test calls are kept out of the recovery dashboard.
+13. **Activity timeline** — every recovery/replan/recommendation/approval action is logged with a timestamp in the UI, giving a readable audit trail of the incident response.
 13. **Downloadable recovery report** — a one-click plain-text export of the incident, offers, recommended plan, alternatives considered, AI explanation, and approval status, suitable for attaching to an incident postmortem.
 
 ## Why CALL-E matters

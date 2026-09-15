@@ -112,24 +112,55 @@ class RecoveryEngine:
         key = request.idempotency_key
         if key and key in IDEMPOTENCY:
             return self._snapshot(IDEMPOTENCY[key])
+
         run_id = str(uuid.uuid4())[:8]
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
-        technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
-        state = {"run_id": run_id, "request": request.model_dump(), "maintenance": {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}, "offers": [], "plans": [], "stage": "initial_calls", "next_supplier_index": 0, "approved": False, "calls": []}
-        # Live mode rings every configured supplier simultaneously — real calls cost
-        # CALL-E credits and multiple real people may need to be reached in parallel,
-        # so all suppliers are dialed at once rather than one-at-a-time-then-replan.
-        # existing_offers=[] for every call since none have completed yet at dial time;
-        # results are gathered and appended in supplier order (not completion order) so
-        # the UI always lists Supplier A, B, C, D in the order they were configured.
-        # Dispatch one supplier at a time. A later replan uses the first call's
-        # actual offer/failure before deciding whether another real call is useful.
-        if request.suppliers:
-            await self._call_and_store_async(state, request, 0)
-            state["next_supplier_index"] = 1
-        state["calls"] = list(self.calle.calls.values())
+        technician_intelligence = self.maintenance_intelligence(
+            request.part_number, request.part_description, request.available_technicians,
+            request.required_technicians_override, request.installation_minutes_override
+        )
+        state = {
+            "run_id": run_id,
+            "request": request.model_dump(),
+            "maintenance": {
+                "task": task_name,
+                "required_technicians": required_techs,
+                "installation_minutes": installation,
+                "source": technician_intelligence["source"],
+                "technician_intelligence": technician_intelligence,
+            },
+            "offers": [],
+            "plans": [],
+            "stage": "calling_supplier",
+            "next_supplier_index": 0,
+            "approved": False,
+            "calls": [],
+            "call_ids": [],
+            "call_failures": [],
+        }
+
+        # LIVE is deliberately sequential and adaptive. Supplier A is called first.
+        # A second supplier is called ONLY when confirmed compatible stock still falls
+        # short of the requested quantity. This prevents unnecessary real phone calls
+        # and CALL-E spend. The loop stops as soon as the full quantity is covered.
+        while state["next_supplier_index"] < len(request.suppliers):
+            index = state["next_supplier_index"]
+            state["stage"] = "calling_supplier"
+            await self._call_and_store_async(state, request, index)
+            state["next_supplier_index"] += 1
+            self._refresh_plan(state, request)
+            remaining = self._remaining_quantity(state["offers"], request.quantity)
+            if remaining <= 0:
+                state["stage"] = "recovery_ready"
+                break
+
+        if state["next_supplier_index"] >= len(request.suppliers) and self._remaining_quantity(state["offers"], request.quantity) > 0:
+            state["stage"] = "shortfall_unresolved"
+        elif state["stage"] != "recovery_ready":
+            state["stage"] = "recovery_ready"
+
         RUNS[run_id] = state
         if key:
             IDEMPOTENCY[key] = run_id
@@ -146,8 +177,13 @@ class RecoveryEngine:
 
     async def _call_and_store_async(self, state, request, index, existing_offers=None):
         supplier = request.suppliers[index]
+        before_call_ids = set(state.get("call_ids", []))
         try:
-            data = await self.calle.call_supplier_async(supplier, request, existing_offers if existing_offers is not None else state["offers"], idempotency_key=f"restartai-{state['run_id']}-{index}")
+            data = await self.calle.call_supplier_async(
+                supplier, request,
+                existing_offers if existing_offers is not None else state["offers"],
+                idempotency_key=f"restartai-{state['run_id']}-{index}"
+            )
             offer = Offer(**data)
         except Exception as exc:
             call_id = getattr(exc, "call_id", None)
@@ -156,13 +192,31 @@ class RecoveryEngine:
             category = diagnostics.get("category")
             human_message = diagnostics.get("human_message")
             notes = human_message or str(exc)
-            offer = Offer(supplier=supplier.name, phone=supplier.phone, status="SUPPLIER UNAVAILABLE" if category == "supplier_unavailable" else "CALL FAILED", notes=notes, source="CALL-E LIVE CALL", call_id=call_id or record.get("call_id"))
-            state.setdefault("call_failures", []).append({"supplier": supplier.name, "phone": supplier.phone, "call_id": call_id or record.get("call_id"), "category": category, "human_message": human_message, "failure_code": diagnostics.get("failure_code"), "failure_message": diagnostics.get("failure_message"), "attempt_failure_code": diagnostics.get("attempt_failure_code"), "attempt_failure_message": diagnostics.get("attempt_failure_message"), "recipient_status": diagnostics.get("recipient_status"), "attempt_status": diagnostics.get("attempt_status")})
+            offer = Offer(
+                supplier=supplier.name, phone=supplier.phone,
+                status="SUPPLIER UNAVAILABLE" if category == "supplier_unavailable" else "CALL FAILED",
+                notes=notes, source="CALL-E LIVE CALL",
+                call_id=call_id or record.get("call_id")
+            )
+            state.setdefault("call_failures", []).append({
+                "supplier": supplier.name, "phone": supplier.phone,
+                "call_id": call_id or record.get("call_id"),
+                "category": category, "human_message": human_message,
+                "failure_code": diagnostics.get("failure_code"),
+                "failure_message": diagnostics.get("failure_message"),
+                "attempt_failure_code": diagnostics.get("attempt_failure_code"),
+                "attempt_failure_message": diagnostics.get("attempt_failure_message"),
+                "recipient_status": diagnostics.get("recipient_status"),
+                "attempt_status": diagnostics.get("attempt_status"),
+            })
         offer_dict = offer.model_dump()
-        if existing_offers is None:
-            # Sequential (replan) path: mutate shared state directly as before.
-            state["offers"].append(offer_dict)
-            state["calls"] = list(self.calle.calls.values())
+        state["offers"].append(offer_dict)
+        call_id = offer_dict.get("call_id")
+        if call_id and call_id not in state.setdefault("call_ids", []):
+            state["call_ids"].append(call_id)
+        # Keep only this recovery run's calls; TEST LIVE CALL records must never
+        # appear on the incident dashboard.
+        state["calls"] = [self.calle.calls[cid] for cid in state["call_ids"] if cid in self.calle.calls]
         return offer_dict
 
     def replan(self, run_id):
@@ -207,22 +261,34 @@ class RecoveryEngine:
             raise KeyError("Run not found")
         state = RUNS[run_id]
         request = RecoveryRequest(**state["request"])
-        # In LIVE mode every supplier was already called in parallel at start, so
-        # next_supplier_index is already at len(suppliers) and this block is a no-op.
-        # It only still fires for the (rare) case a run has suppliers added later.
-        if state["next_supplier_index"] < len(request.suppliers):
-            remaining = self._remaining_quantity(state["offers"], request.quantity)
-            if remaining > 0:
-                await self._call_and_store_async(state, request, state["next_supplier_index"])
-                state["next_supplier_index"] += 1
+
+        remaining = self._remaining_quantity(state["offers"], request.quantity)
+        if remaining > 0 and state["next_supplier_index"] < len(request.suppliers):
+            state["stage"] = "calling_supplier"
+            await self._call_and_store_async(state, request, state["next_supplier_index"])
+            state["next_supplier_index"] += 1
+
+        self._refresh_plan(state, request)
+        remaining = self._remaining_quantity(state["offers"], request.quantity)
+        state["stage"] = "recovery_ready" if remaining <= 0 else "shortfall_unresolved"
+        return self._snapshot(run_id)
+
+    def _refresh_plan(self, state, request):
         task_name, task_info = self._maintenance_info(request)
         required_techs = request.required_technicians_override if request.required_technicians_override is not None else task_info["required_technicians"]
         installation = request.installation_minutes_override if request.installation_minutes_override is not None else task_info["installation_minutes"]
-        technician_intelligence = self.maintenance_intelligence(request.part_number, request.part_description, request.available_technicians, request.required_technicians_override, request.installation_minutes_override)
-        state["maintenance"] = {"task": task_name, "required_technicians": required_techs, "installation_minutes": installation, "source": technician_intelligence["source"], "technician_intelligence": technician_intelligence}
+        technician_intelligence = self.maintenance_intelligence(
+            request.part_number, request.part_description, request.available_technicians,
+            request.required_technicians_override, request.installation_minutes_override
+        )
+        state["maintenance"] = {
+            "task": task_name,
+            "required_technicians": required_techs,
+            "installation_minutes": installation,
+            "source": technician_intelligence["source"],
+            "technician_intelligence": technician_intelligence,
+        }
         state["plans"] = [p.model_dump() for p in self._generate_plans(request, state["offers"], state["maintenance"])]
-        state["stage"] = "replanned"
-        return self._snapshot(run_id)
 
     def approve(self, run_id):
         if run_id not in RUNS:
@@ -297,14 +363,42 @@ class RecoveryEngine:
         state = RUNS[run_id]
         offers = state["offers"]
         safe_offers = [{**offer, "phone": self.calle.mask_phone(offer["phone"])} for offer in offers]
-        safe_request = {**state["request"], "suppliers": [{**supplier, "phone": self.calle.mask_phone(supplier["phone"])} for supplier in state["request"]["suppliers"]]}
+        safe_request = {
+            **state["request"],
+            "suppliers": [{**supplier, "phone": self.calle.mask_phone(supplier["phone"])} for supplier in state["request"]["suppliers"]]
+        }
+        safe_calls = []
+        for call_id in state.get("call_ids", []):
+            record = self.calle.calls.get(call_id)
+            if not record:
+                continue
+            diagnostics = record.get("diagnostics", {})
+            result = record.get("result")
+            safe_calls.append({
+                "call_id": call_id,
+                "supplier": record.get("supplier"),
+                "phone_masked": record.get("phone_masked"),
+                "status": record.get("status"),
+                "purpose": record.get("purpose", "supplier_recovery"),
+                "created_at": record.get("created_at"),
+                "completed_at": record.get("completed_at"),
+                "failure_code": record.get("failure_code"),
+                "failure_message": record.get("failure_message"),
+                "category": record.get("category"),
+                "human_message": record.get("human_message"),
+                "structured_result": result,
+                "summary": record.get("summary"),
+                "confidence": record.get("confidence"),
+                "transcript_available": diagnostics.get("transcript_available", False),
+            })
         return {
             "run_id": run_id, "stage": state["stage"], "request": safe_request,
             "maintenance": state["maintenance"], "offers": safe_offers, "plans": state["plans"],
             "technician_intelligence": state["maintenance"].get("technician_intelligence", {}),
             "recommended_plan": state["plans"][0] if state["plans"] else None,
             "approved": state["approved"], "mode": self.calle.mode,
-            "calls": state.get("calls", []),
+            "calls": safe_calls,
             "call_failures": state.get("call_failures", []),
-            "next_supplier_available": state["next_supplier_index"] < len(RecoveryRequest(**state["request"]).suppliers)
+            "remaining_quantity": self._remaining_quantity(state["offers"], RecoveryRequest(**state["request"]).quantity),
+            "next_supplier_available": state["next_supplier_index"] < len(RecoveryRequest(**state["request"]).suppliers),
         }

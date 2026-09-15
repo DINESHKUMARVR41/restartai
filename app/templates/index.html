@@ -72,6 +72,10 @@
       <tbody id="offerRows"><tr class="empty-row"><td colspan="7">Start a recovery run to see supplier calls.</td></tr></tbody>
     </table>
     <div id="offerNotes" class="offer-notes"></div>
+    <div class="call-timeline">
+      <div class="row-head"><b>LIVE call activity</b><span class="hint">Only suppliers actually called for this recovery appear here.</span></div>
+      <div id="callTimeline" class="call-timeline-list"><div class="empty-row">No recovery calls yet.</div></div>
+    </div>
 
     <div class="supplier-inputs">
       <div class="row-head"><b>Configured supplier phone numbers</b><span class="hint">LIVE uses these numbers; DEMO ignores them.</span></div>
@@ -87,7 +91,7 @@
 
 <section id="replanPanel" class="panel hidden">
   <div class="row-head">
-    <div><h2>03 · Adaptive replanning</h2><p class="hint">LIVE mode calls all configured suppliers simultaneously at start — replan just refreshes the plan as offers come in. DEMO mode calls the next supplier only if a shortfall remains.</p></div>
+    <div><h2>03 · Adaptive replanning</h2><p class="hint">LIVE mode calls suppliers sequentially. Supplier A is called first; additional suppliers are called automatically only when confirmed compatible stock is still below the required quantity.</p></div>
     <button class="secondary" onclick="replan()">Replan / call next supplier</button>
   </div>
   <div id="replanMessage" class="replan-box"></div>

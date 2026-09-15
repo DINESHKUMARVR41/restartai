@@ -24,7 +24,7 @@ class Settings:
 
     @property
     def configured(self) -> bool:
-        return self.call_e_mode == "demo" or bool(self.calle_api_key)
+        return self.configuration_error is None and (self.call_e_mode == "demo" or bool(self.calle_api_key))
 
     @property
     def configuration_error(self) -> str | None:

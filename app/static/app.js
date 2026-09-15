@@ -141,11 +141,15 @@ async function startRecovery(){
     chatHistory=[];
     $("chatMessages").innerHTML="";
     appendChatMessage("assistant","Ask me anything about this recovery run — suppliers, offers, the recommended plan, or costs.");
-    logActivity(`wave_complete offers=${(data.offers||[]).length}`);
-    $("replanPanel").classList.remove("hidden");
-    $("replanMessage").innerHTML=data.next_supplier_available
-      ? "<b>Initial wave complete.</b> The agent will call the next configured supplier only if a shortfall remains."
-      : "<b>No additional supplier is configured.</b> Replanning will still calculate the best available plan.";
+    (data.calls||[]).forEach(c=>logActivity(`live_call supplier="${c.supplier}" status=${c.status} call_id=${c.call_id}`));
+    logActivity(`recovery_complete suppliers_called=${(data.calls||[]).length} remaining=${data.remaining_quantity??"?"}`);
+    $("replanPanel").classList.toggle("hidden", !(data.remaining_quantity>0 && data.next_supplier_available));
+    if(data.remaining_quantity>0 && data.next_supplier_available){
+      $("replanMessage").innerHTML=`<b>Shortfall remains: ${esc(data.remaining_quantity)} units.</b> The automatic workflow stopped after the adaptive call cycle. Use this button only if you want to continue to the next configured supplier.`;
+    }else if(data.remaining_quantity>0){
+      $("replanMessage").innerHTML=`<b>Unresolved shortfall: ${esc(data.remaining_quantity)} units.</b> No additional configured suppliers remain.`;
+    }
+    $("planPanel").classList.remove("hidden");
   }catch(e){showError(e.message)} finally{$("startBtn").disabled=false; $("stage").classList.remove("active")}
 }
 
@@ -157,10 +161,11 @@ async function replan(){
     const r=await fetch(`/api/recovery/${runId}/replan`,{method:"POST"});
     const data=await readJsonResponse(r);
     render(data); $("planPanel").classList.remove("hidden");
-    logActivity(`replan offers=${(data.offers||[]).length}`);
-    $("replanMessage").innerHTML=data.next_supplier_available
-      ? "<b>One adaptive supplier call completed.</b> Replan again to continue discovery if a shortfall remains."
-      : "<b>Replan complete.</b> All configured suppliers have been considered.";
+    logActivity(`adaptive_call offers=${(data.offers||[]).length} remaining=${data.remaining_quantity??"?"}`);
+    $("replanPanel").classList.toggle("hidden", !(data.remaining_quantity>0 && data.next_supplier_available));
+    $("replanMessage").innerHTML=data.remaining_quantity>0
+      ? (data.next_supplier_available ? `<b>Shortfall remains: ${esc(data.remaining_quantity)} units.</b> One more supplier can be called.` : `<b>Unresolved shortfall: ${esc(data.remaining_quantity)} units.</b> No more configured suppliers remain.`)
+      : "<b>Quantity fully covered.</b> No further supplier calls are needed.";
   }catch(e){showError(e.message)} finally{$("stage").classList.remove("active")}
 }
 
@@ -257,6 +262,31 @@ function renderAlternatives(plans){
     </tr>`).join("");
 }
 
+function renderCallTimeline(calls){
+  const el=$("callTimeline");
+  if(!el)return;
+  if(!calls.length){el.innerHTML='<div class="empty-row">No recovery calls yet.</div>';return}
+  el.innerHTML=calls.map(c=>{
+    const r=c.structured_result||{};
+    const hasResult=Object.keys(r).length>0;
+    const status=String(c.status||"unknown").toUpperCase();
+    const result=hasResult?`<div class="call-result-grid">
+      <div><small>Available</small><b>${esc(safeText(r.available_quantity))}</b></div>
+      <div><small>Unit price</small><b>${esc(safeText(r.unit_price))} ${esc(safeText(r.currency||"INR"))}</b></div>
+      <div><small>Delivery</small><b>${esc(safeText(r.delivery_hours))}h</b></div>
+      <div><small>Compatibility</small><b>${esc(safeText(r.compatible))}</b></div>
+    </div>`:"";
+    const summary=c.summary||r.summary||c.human_message||"";
+    return `<div class="call-event">
+      <div class="call-event-head"><b>${esc(c.supplier||"Supplier")}</b><span class="stage-badge">${esc(status)}</span></div>
+      <div class="call-meta"><span>${esc(c.phone_masked||"")}</span><span class="call-id">${esc(c.call_id||"")}</span><span>${c.transcript_available?"Transcript captured":"No transcript"}</span></div>
+      ${summary?`<div class="call-summary">${esc(summary)}</div>`:""}
+      ${result}
+      ${c.failure_message?`<div class="bad call-summary">${esc(c.failure_message)}</div>`:""}
+    </div>`;
+  }).join("");
+}
+
 function render(data){
   lastRunData=data;
   $("stage").textContent=(data.stage||"").toUpperCase();
@@ -283,6 +313,8 @@ function render(data){
     $("offerNotes").innerHTML=(!confirmedOffers.length?`<div class="note-line bad">No supplier has confirmed availability yet.</div>`:"")
       +offers.filter(o=>o.notes).map(o=>`<div class="note-line">${esc(o.supplier)}: ${esc(o.notes)}${o.call_id?` · CALL-E ${esc(o.call_id)}`:""}</div>`).join("");
   }
+
+  renderCallTimeline(data.calls||[]);
 
   if(data.maintenance){
     const technician=data.technician_intelligence||data.maintenance.technician_intelligence||{
